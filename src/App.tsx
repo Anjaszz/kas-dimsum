@@ -17,6 +17,9 @@ function App() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [passwordModal, setPasswordModal] = useState<{isOpen: boolean, action: 'edit' | 'delete' | null, data: any}>({isOpen: false, action: null, data: null});
+  const [passwordInput, setPasswordInput] = useState('');
 
   // Initialize Data
   useEffect(() => {
@@ -76,6 +79,63 @@ function App() {
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
 
+  const promptPassword = (action: 'edit' | 'delete', data: any) => {
+    setPasswordModal({ isOpen: true, action, data });
+    setPasswordInput('');
+  };
+
+  const handlePasswordSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (passwordInput === 'Anjas123') {
+      if (passwordModal.action === 'edit') {
+        const t = passwordModal.data as Transaction;
+        setEditingId(t.id);
+        setType(t.type);
+        setAmount(new Intl.NumberFormat('id-ID').format(t.amount));
+        setDate(t.date);
+        setDescription(t.description);
+        setImagePreview(t.image);
+        setImageFile(null);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      } else if (passwordModal.action === 'delete') {
+        executeDelete(passwordModal.data as string);
+      }
+      setPasswordModal({ isOpen: false, action: null, data: null });
+    } else {
+      alert('Password salah!');
+    }
+  };
+
+  const handleCancelEdit = () => {
+    setEditingId(null);
+    setAmount('');
+    setDescription('');
+    setImagePreview(null);
+    setImageFile(null);
+    setDate(getLocalDateTime());
+    const fileInput = document.getElementById('image-input') as HTMLInputElement;
+    if (fileInput) fileInput.value = '';
+  };
+
+  const executeDelete = async (id: string) => {
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { error } = await supabase
+          .from('transactions')
+          .delete()
+          .eq('id', id);
+        
+        if (error) throw error;
+      } catch (err) {
+        console.error("Gagal menghapus:", err);
+        alert("Gagal menghapus transaksi dari database.");
+        return;
+      }
+    }
+    
+    setTransactions(prev => prev.filter(t => t.id !== id));
+  };
+
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -128,30 +188,45 @@ function App() {
           imageUrl = publicUrlData.publicUrl;
         }
 
-        // 2. Insert ke Database
+        // 2. Insert atau Update ke Database
         const dbTransactionData = {
           type,
           amount: numericAmount,
           date,
           description: description || (type === 'pemasukan' ? 'Pemasukan' : 'Pengeluaran'),
-          image: imageUrl
+          image: imageUrl ? imageUrl : (editingId && !imageFile ? finalBase64Preview : null)
         };
 
-        const { data: insertedData, error: insertError } = await supabase
-          .from('transactions')
-          .insert([dbTransactionData])
-          .select()
-          .single();
+        if (editingId) {
+          const { error: updateError } = await supabase
+            .from('transactions')
+            .update(dbTransactionData)
+            .eq('id', editingId);
+            
+          if (updateError) {
+            console.error("DB Update Error:", updateError);
+            alert("Gagal memperbarui transaksi.");
+            setIsSubmitting(false);
+            return;
+          }
+          setTransactions(prev => prev.map(t => t.id === editingId ? { ...t, ...dbTransactionData, id: editingId } : t));
+        } else {
+          const { data: insertedData, error: insertError } = await supabase
+            .from('transactions')
+            .insert([dbTransactionData])
+            .select()
+            .single();
+            
+          if (insertError) {
+            console.error("DB Insert Error:", insertError);
+            alert("Gagal menyimpan transaksi ke database.");
+            setIsSubmitting(false);
+            return;
+          }
           
-        if (insertError) {
-          console.error("DB Insert Error:", insertError);
-          alert("Gagal menyimpan transaksi ke database.");
-          setIsSubmitting(false);
-          return;
+          // Simpan state dengan ID dari supabase
+          setTransactions(prev => [insertedData, ...prev]);
         }
-        
-        // Simpan state dengan ID dari supabase
-        setTransactions(prev => [insertedData, ...prev]);
 
       } catch (err) {
         console.error("Error tidak terduga:", err);
@@ -160,27 +235,28 @@ function App() {
       }
     } else {
       // Localstorage fallback mode
-      const newTransaction: Transaction = {
-        id: Date.now().toString(),
+      const transactionData = {
         type,
         amount: numericAmount,
         date,
         description: description || (type === 'pemasukan' ? 'Pemasukan' : 'Pengeluaran'),
         image: finalBase64Preview
       };
-      setTransactions(prev => [newTransaction, ...prev]);
+
+      if (editingId) {
+        setTransactions(prev => prev.map(t => t.id === editingId ? { ...t, ...transactionData, id: editingId } : t));
+      } else {
+        const newTransaction: Transaction = {
+          id: Date.now().toString(),
+          ...transactionData
+        };
+        setTransactions(prev => [newTransaction, ...prev]);
+      }
     }
     
     // Reset Form
-    setAmount('');
-    setDescription('');
-    setImagePreview(null);
-    setImageFile(null);
-    setDate(getLocalDateTime());
+    handleCancelEdit();
     setIsSubmitting(false);
-    
-    const fileInput = document.getElementById('image-input') as HTMLInputElement;
-    if (fileInput) fileInput.value = '';
   };
 
   const formatCurrency = (amount: number) => {
@@ -245,7 +321,7 @@ function App() {
           <div className="main-content">
             <div className="glass-panel">
               <h2 className="panel-title">
-                <span>✍️</span> Catat Transaksi
+                <span>✍️</span> {editingId ? 'Edit Transaksi' : 'Catat Transaksi'}
               </h2>
               <form className="transaction-form" onSubmit={handleSubmit}>
                 <div className="type-selector">
@@ -324,9 +400,16 @@ function App() {
                   )}
                 </div>
 
-                <button type="submit" className="submit-btn" disabled={isSubmitting}>
-                  {isSubmitting ? 'Menyimpan ke Server...' : 'Simpan Transaksi'}
-                </button>
+                <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
+                  <button type="submit" className="submit-btn" disabled={isSubmitting} style={{ flex: 1, marginTop: 0 }}>
+                    {isSubmitting ? 'Menyimpan...' : (editingId ? 'Update Transaksi' : 'Simpan Transaksi')}
+                  </button>
+                  {editingId && (
+                    <button type="button" className="cancel-btn" onClick={handleCancelEdit} style={{ flex: 1, marginTop: 0 }}>
+                      Batal
+                    </button>
+                  )}
+                </div>
               </form>
             </div>
 
@@ -359,6 +442,10 @@ function App() {
                             onClick={() => setSelectedImage(t.image)} 
                           />
                         )}
+                        <div className="history-actions">
+                          <button className="action-btn edit" onClick={(e) => { e.stopPropagation(); promptPassword('edit', t); }}>Edit</button>
+                          <button className="action-btn delete" onClick={(e) => { e.stopPropagation(); promptPassword('delete', t.id); }}>Hapus</button>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -378,6 +465,31 @@ function App() {
           <div className="image-modal-content" onClick={(e) => e.stopPropagation()}>
             <span className="image-modal-close" onClick={() => setSelectedImage(null)}>&times;</span>
             <img src={selectedImage} alt="Bukti Full" />
+          </div>
+        </div>
+      )}
+
+      {passwordModal.isOpen && (
+        <div className="password-modal-overlay" onClick={() => setPasswordModal({ isOpen: false, action: null, data: null })}>
+          <div className="password-modal-content" onClick={(e) => e.stopPropagation()}>
+            <h3>Masukkan Password</h3>
+            <p>Otorisasi diperlukan untuk aksi <strong>{passwordModal.action === 'edit' ? 'Edit' : 'Hapus'}</strong>.</p>
+            <form onSubmit={handlePasswordSubmit}>
+              <input 
+                type="password" 
+                autoFocus
+                className="form-control" 
+                placeholder="Password" 
+                value={passwordInput}
+                onChange={(e) => setPasswordInput(e.target.value)}
+                style={{ width: '100%', marginBottom: '1rem', marginTop: '1rem' }}
+                required
+              />
+              <div style={{ display: 'flex', gap: '1rem' }}>
+                <button type="submit" className="submit-btn" style={{ flex: 1, marginTop: 0 }}>Konfirmasi</button>
+                <button type="button" className="cancel-btn" onClick={() => setPasswordModal({ isOpen: false, action: null, data: null })} style={{ flex: 1, marginTop: 0 }}>Batal</button>
+              </div>
+            </form>
           </div>
         </div>
       )}

@@ -18,38 +18,76 @@ function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [passwordModal, setPasswordModal] = useState<{isOpen: boolean, action: 'edit' | 'delete' | null, data: any}>({isOpen: false, action: null, data: null});
+  const [passwordModal, setPasswordModal] = useState<{isOpen: boolean, action: 'edit' | 'delete' | 'edit_report' | 'delete_report' | null, data: any}>({isOpen: false, action: null, data: null});
   const [passwordInput, setPasswordInput] = useState('');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'report'>('dashboard');
+
+  // Daily Report State
+  const [grossIncome, setGrossIncome] = useState<string>('');
+  const [reportDate, setReportDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [expenseItems, setExpenseItems] = useState<{ name: string; amount: string }[]>([
+    { name: 'Masuk Kas', amount: '' },
+    { name: 'Karyawan', amount: '' },
+    { name: 'Kontrakan', amount: '' },
+    { name: 'Gas', amount: '' },
+  ]);
+  const [savedReports, setSavedReports] = useState<any[]>([]);
+  const [editingReportId, setEditingReportId] = useState<string | null>(null);
+  const [expandedReportId, setExpandedReportId] = useState<string | null>(null);
 
   // Initialize Data
   useEffect(() => {
     const loadData = async () => {
       setIsLoading(true);
+      
+      // 1. Load from LocalStorage first (for quick initial display)
+      const savedTrans = localStorage.getItem('dimsum_transactions');
+      if (savedTrans) setTransactions(JSON.parse(savedTrans));
+      
+      const savedRep = localStorage.getItem('dimsum_reports');
+      if (savedRep) setSavedReports(JSON.parse(savedRep));
+
+      // 2. Sync with Supabase (Source of Truth)
       if (isSupabaseConfigured && supabase) {
         try {
-          // Fetch from Supabase DB
-          const { data, error } = await supabase
+          // Fetch transactions
+          const { data: transData, error: transError } = await supabase
             .from('transactions')
             .select('*')
             .order('date', { ascending: false });
           
-          if (error) {
-            console.error(error);
-            alert("Terjadi kesalahan saat memuat data DB.");
+          if (!transError && transData) {
+            setTransactions(transData);
+            localStorage.setItem('dimsum_transactions', JSON.stringify(transData));
           }
-          if (data) setTransactions(data);
+
+          // Fetch reports
+          const { data: reportData, error: reportError } = await supabase
+            .from('daily_reports')
+            .select('*')
+            .order('date', { ascending: false });
+          
+          if (!reportError && reportData) {
+            console.log("Syncing reports from DB:", reportData.length, "found");
+            setSavedReports(reportData);
+            localStorage.setItem('dimsum_reports', JSON.stringify(reportData));
+          } else if (reportError) {
+             console.warn("DB daily_reports error:", reportError.message);
+          }
         } catch (error) {
-          console.error("Gagal terhubung ke Supabase:", error);
+          console.error("Gagal sinkronisasi Supabase:", error);
         }
-      } else {
-        // Fallback to localstorage if Supabase keys not set
-        const saved = localStorage.getItem('dimsum_transactions');
-        setTransactions(saved ? JSON.parse(saved) : []);
-      }
+      } 
+
       setIsLoading(false);
     };
     loadData();
   }, []);
+
+  // Save reports to local storage whenever changed
+  useEffect(() => {
+    localStorage.setItem('dimsum_reports', JSON.stringify(savedReports));
+  }, [savedReports]);
 
   // Save to local storage only if not configured
   useEffect(() => {
@@ -79,7 +117,7 @@ function App() {
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
 
-  const promptPassword = (action: 'edit' | 'delete', data: any) => {
+  const promptPassword = (action: 'edit' | 'delete' | 'edit_report' | 'delete_report', data: any) => {
     setPasswordModal({ isOpen: true, action, data });
     setPasswordInput('');
   };
@@ -99,6 +137,15 @@ function App() {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       } else if (passwordModal.action === 'delete') {
         executeDelete(passwordModal.data as string);
+      } else if (passwordModal.action === 'edit_report') {
+        const report = passwordModal.data;
+        setEditingReportId(report.id);
+        setReportDate(report.date);
+        setGrossIncome(new Intl.NumberFormat('id-ID').format(report.gross));
+        setExpenseItems(report.expenses);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      } else if (passwordModal.action === 'delete_report') {
+        executeDeleteReport(passwordModal.data as string);
       }
       setPasswordModal({ isOpen: false, action: null, data: null });
     } else {
@@ -285,6 +332,148 @@ function App() {
     
   const balance = totalIncome - totalExpense;
 
+  // Report logic
+  const addExpenseItem = () => {
+    setExpenseItems([...expenseItems, { name: '', amount: '' }]);
+  };
+
+  const removeExpenseItem = (index: number) => {
+    setExpenseItems(expenseItems.filter((_, i) => i !== index));
+  };
+
+  const updateExpenseItem = (index: number, field: 'name' | 'amount', value: string) => {
+    const newItems = [...expenseItems];
+    if (field === 'amount') {
+      const rawValue = value.replace(/[^0-9]/g, '');
+      const formattedValue = rawValue ? new Intl.NumberFormat('id-ID').format(Number(rawValue)) : '';
+      newItems[index][field] = formattedValue;
+    } else {
+      newItems[index][field] = value;
+    }
+    setExpenseItems(newItems);
+  };
+
+  const numericGross = Number(grossIncome.replace(/\./g, '')) || 0;
+  const totalReportExpenses = expenseItems.reduce((sum, item) => {
+    const amt = Number(item.amount.replace(/\./g, '')) || 0;
+    return sum + amt;
+  }, 0);
+  const remainingCash = numericGross - totalReportExpenses;
+
+  const copyReportToClipboard = () => {
+    const d = new Date(reportDate);
+    const dateFormatted = new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(d);
+    
+    let text = `Laporan Harian - tgl ${dateFormatted}\n\n`;
+    text += `Total: ${formatCurrency(numericGross)}\n`;
+    expenseItems.forEach(item => {
+      if (item.name && item.amount) {
+        text += `${item.name.toLowerCase()} = ${item.amount}\n`;
+      }
+    });
+    text += `\nsisa uang nya masuk kembalian: ${formatCurrency(remainingCash)}`;
+    
+    navigator.clipboard.writeText(text);
+    alert('Laporan berhasil disalin ke clipboard!');
+  };
+
+  const handleSaveReport = async () => {
+    if (!grossIncome || expenseItems.some(i => i.name && !i.amount)) {
+      alert("Mohon lengkapi data penghasilan dan jumlah pengeluaran.");
+      return;
+    }
+
+    const reportData = {
+      date: reportDate,
+      gross: numericGross,
+      expenses: expenseItems.filter(i => i.name && i.amount),
+      sisa: remainingCash
+    };
+
+    setIsSubmitting(true);
+    if (isSupabaseConfigured && supabase) {
+      try {
+        if (editingReportId) {
+          const { error } = await supabase
+            .from('daily_reports')
+            .update(reportData)
+            .eq('id', editingReportId);
+          
+          if (error) {
+            console.error("DB Update Report Error:", error);
+          } else {
+            setSavedReports(prev => prev.map(r => r.id === editingReportId ? { ...r, ...reportData } : r));
+          }
+        } else {
+          const newReport = { id: Date.now().toString(), ...reportData };
+          const { data, error } = await supabase
+            .from('daily_reports')
+            .insert([newReport])
+            .select()
+            .single();
+          
+          if (error) {
+            console.error("DB Save Report Error:", error);
+          } else {
+            setSavedReports(prev => [data, ...prev]);
+          }
+        }
+      } catch (err) {
+        console.error("Unexpected error saving report:", err);
+      }
+    } else {
+      // Localstorage fallback mode
+      if (editingReportId) {
+        setSavedReports(prev => prev.map(r => r.id === editingReportId ? { ...r, ...reportData } : r));
+      } else {
+        const newReport = {
+          id: Date.now().toString(),
+          ...reportData
+        };
+        setSavedReports(prev => [newReport, ...prev]);
+      }
+    }
+
+    setIsSubmitting(false);
+    alert(editingReportId ? "Laporan berhasil diperbarui!" : "Laporan berhasil disimpan!");
+    
+    // Clear form after save
+    handleCancelReportEdit();
+  };
+
+  const handleDeleteReport = (id: string) => {
+    promptPassword('delete_report', id);
+  };
+
+  const executeDeleteReport = async (id: string) => {
+    if (isSupabaseConfigured && supabase) {
+      try {
+        await supabase.from('daily_reports').delete().eq('id', id);
+      } catch (err) {
+        console.error("Delete report error:", err);
+      }
+    }
+
+    setSavedReports(prev => prev.filter(r => r.id !== id));
+    if (editingReportId === id) handleCancelReportEdit();
+  };
+
+  const handleCancelReportEdit = () => {
+    setEditingReportId(null);
+    setGrossIncome('');
+    setReportDate(new Date().toISOString().split('T')[0]);
+    setExpenseItems([
+      { name: 'Masuk kas', amount: '' },
+      { name: 'Karyawan', amount: '' },
+      { name: 'Kontrakan', amount: '' },
+      { name: 'Gas', amount: '' },
+    ]);
+  };
+
+  const loadReportToForm = (report: any) => {
+    promptPassword('edit_report', report);
+  };
+
   return (
     <div className="app-container">
       <header>
@@ -297,11 +486,26 @@ function App() {
         )}
       </header>
 
+      <nav className="nav-tabs">
+        <button 
+          className={`nav-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
+          onClick={() => setActiveTab('dashboard')}
+        >
+          📊 Dashboard Kas
+        </button>
+        <button 
+          className={`nav-btn ${activeTab === 'report' ? 'active' : ''}`}
+          onClick={() => setActiveTab('report')}
+        >
+          📝 Laporan Harian
+        </button>
+      </nav>
+
       {isLoading ? (
         <div style={{ textAlign: 'center', padding: '4rem', color: 'var(--text-secondary)' }}>
-          Memuat data transaksi...
+          Memuat data...
         </div>
-      ) : (
+      ) : activeTab === 'dashboard' ? (
         <>
           <section className="dashboard-cards">
             <div className="card balance">
@@ -458,6 +662,192 @@ function App() {
             </div>
           </div>
         </>
+      ) : (
+        <div className="report-container">
+          <div className="report-grid">
+            <div className="glass-panel">
+              <h2 className="panel-title"><span>💰</span> Input Penghasilan & Pengeluaran</h2>
+              <div className="form-group" style={{ marginBottom: '1.5rem' }}>
+                <label>Tanggal Laporan</label>
+                <input 
+                  type="date" 
+                  className="form-control" 
+                  value={reportDate} 
+                  onChange={(e) => setReportDate(e.target.value)} 
+                />
+              </div>
+              <div className="form-group" style={{ marginBottom: '1.5rem' }}>
+                <label>Total Penghasilan Kotor (Gross)*</label>
+                <input
+                  type="text"
+                  className="form-control"
+                  style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'var(--income)' }}
+                  value={grossIncome}
+                  onChange={(e) => {
+                    const rawValue = e.target.value.replace(/[^0-9]/g, '');
+                    const formattedValue = rawValue ? new Intl.NumberFormat('id-ID').format(Number(rawValue)) : '';
+                    setGrossIncome(formattedValue);
+                  }}
+                  placeholder="Contoh: 1.840.000"
+                />
+              </div>
+
+              <div style={{ marginBottom: '0.8rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <label style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Daftar Pengeluaran Harian</label>
+              </div>
+
+              {expenseItems.map((item, index) => (
+                <div key={index} className="expense-item-row">
+                  <input 
+                    type="text" 
+                    className="form-control" 
+                    placeholder="Nama pengeluaran" 
+                    value={item.name} 
+                    onChange={(e) => updateExpenseItem(index, 'name', e.target.value)}
+                  />
+                  <input 
+                    type="text" 
+                    className="form-control" 
+                    placeholder="Jumlah" 
+                    value={item.amount} 
+                    onChange={(e) => updateExpenseItem(index, 'amount', e.target.value)}
+                  />
+                  <button className="remove-btn" onClick={() => removeExpenseItem(index)} title="Hapus">
+                    &times;
+                  </button>
+                </div>
+              ))}
+
+              <button className="add-item-btn" onClick={addExpenseItem}>
+                + Tambah Item Pengeluaran
+              </button>
+            </div>
+
+            <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column' }}>
+              <h2 className="panel-title"><span>📄</span> Preview Laporan</h2>
+              
+              <div className="report-preview" id="printable-report">
+                <div style={{ textAlign: 'center', marginBottom: '1.5rem', borderBottom: '1px dashed rgba(255,255,255,0.1)', paddingBottom: '1rem' }}>
+                  <h3 style={{ margin: 0 }}>RASA TERAKHIR</h3>
+                  <p style={{ fontSize: '0.8rem', margin: '5px 0' }}>Laporan Penghasilan Harian</p>
+                  <p style={{ fontSize: '0.9rem', fontWeight: '600' }}>
+                    tgl {new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(reportDate))}
+                  </p>
+                </div>
+
+                <table className="report-table">
+                  <thead>
+                    <tr>
+                      <th>Keterangan</th>
+                      <th className="text-right">Jumlah</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>Total Penghasilan</td>
+                      <td className="text-right highlight">{formatCurrency(numericGross)}</td>
+                    </tr>
+                    {expenseItems.map((item, index) => item.name && (
+                      <tr key={index}>
+                        <td>{item.name}</td>
+                        <td className="text-right" style={{ color: 'var(--expense)' }}>-{formatCurrency(Number(item.amount.replace(/\./g, '')) || 0)}</td>
+                      </tr>
+                    ))}
+                    <tr className="total-row">
+                      <td>Sisa Uang (Kembalian)</td>
+                      <td className="text-right highlight" style={{ fontSize: '1.2rem' }}>{formatCurrency(remainingCash)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <button className="copy-report-btn" onClick={copyReportToClipboard}>
+                <span>📋</span> Salin Teks Laporan
+              </button>
+
+              <button className="save-report-btn" onClick={handleSaveReport} disabled={isSubmitting}>
+                <span>💾</span> {isSubmitting ? 'Menyimpan...' : (editingReportId ? 'Perbarui Laporan' : 'Simpan Laporan')}
+              </button>
+
+              {editingReportId && (
+                <button className="cancel-btn" onClick={handleCancelReportEdit} style={{ width: '100%', marginTop: '0.8rem' }}>
+                  Batal Edit
+                </button>
+              )}
+
+              <div style={{ marginTop: 'auto', paddingTop: '2rem', fontSize: '0.8rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
+                Gunakan sisa uang ini untuk modal kembalian esok hari.
+              </div>
+            </div>
+
+            {savedReports.length > 0 && (
+              <div className="glass-panel saved-reports-list">
+                <h2 className="panel-title"><span>📚</span> Riwayat Laporan Tersimpan</h2>
+                <div className="reports-table-container">
+                  <table className="reports-table">
+                    <thead>
+                      <tr>
+                        <th>Tanggal</th>
+                        <th>Penghasilan Kotor</th>
+                        <th>Banyak Item</th>
+                        <th>Sisa (Kembalian)</th>
+                        <th>Aksi</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {savedReports.map(report => (
+                        <React.Fragment key={report.id}>
+                          <tr>
+                            <td data-label="Tanggal">{new Intl.DateTimeFormat('id-ID', { dateStyle: 'medium' }).format(new Date(report.date))}</td>
+                            <td data-label="Penghasilan Kotor" style={{ color: 'var(--income)', fontWeight: 'bold' }}>{formatCurrency(report.gross)}</td>
+                            <td data-label="Banyak Item">{report.expenses?.length || 0} item</td>
+                            <td data-label="Sisa (Kembalian)" style={{ color: 'var(--primary-orange)', fontWeight: 'bold' }}>{formatCurrency(report.sisa)}</td>
+                            <td>
+                              <div className="report-actions">
+                                <button className={`report-action-btn view ${editingReportId === report.id ? 'active' : ''}`} onClick={() => loadReportToForm(report)}>
+                                  {editingReportId === report.id ? 'Sedang Edit' : 'Edit'}
+                                </button>
+                                <button className="report-action-btn delete" onClick={() => handleDeleteReport(report.id)}>Hapus</button>
+                                <button 
+                                  className={`report-action-btn collapse-btn ${expandedReportId === report.id ? 'active' : ''}`}
+                                  onClick={() => setExpandedReportId(expandedReportId === report.id ? null : report.id)}
+                                  title={expandedReportId === report.id ? 'Tutup Detail' : 'Lihat Detail'}
+                                >
+                                  {expandedReportId === report.id ? '▲ Tutup' : '▼ Detail'}
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                          {expandedReportId === report.id && (
+                            <tr className="expanded-row">
+                              <td colSpan={5}>
+                                <div className="expanded-content">
+                                  <h4>Rincian Pengeluaran:</h4>
+                                  <ul className="expense-details-list">
+                                    {report.expenses.map((exp: any, idx: number) => (
+                                      <li key={idx}>
+                                        <span className="exp-name">{exp.name}</span>
+                                        <span className="exp-amount">{exp.amount}</span>
+                                      </li>
+                                    ))}
+                                    <li className="total-summary">
+                                      <span>Sisa Kembalian:</span>
+                                      <span style={{ color: 'var(--primary-orange)', fontWeight: 'bold' }}>{formatCurrency(report.sisa)}</span>
+                                    </li>
+                                  </ul>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
       {selectedImage && (

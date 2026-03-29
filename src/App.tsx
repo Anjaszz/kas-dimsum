@@ -11,6 +11,18 @@ interface Transaction {
   date: string;
   description: string;
   image: string | null;
+  batch_id?: string | null;
+}
+
+interface Batch {
+  id: string;
+  batch_name: string;
+  start_date: string;
+  end_date: string;
+  total_income: number;
+  total_expense: number;
+  total_balance: number;
+  created_at: string;
 }
 
 function App() {
@@ -21,6 +33,8 @@ function App() {
   const [passwordModal, setPasswordModal] = useState<{isOpen: boolean, action: 'edit' | 'delete' | 'edit_report' | 'delete_report' | null, data: any}>({isOpen: false, action: null, data: null});
   const [passwordInput, setPasswordInput] = useState('');
   const [activeTab, setActiveTab] = useState<'dashboard' | 'report'>('dashboard');
+  const [batches, setBatches] = useState<Batch[]>([]);
+  const [expandedBatchId, setExpandedBatchId] = useState<string | null>(null);
 
   // Daily Report State
   const [grossIncome, setGrossIncome] = useState<string>('');
@@ -34,6 +48,12 @@ function App() {
   const [savedReports, setSavedReports] = useState<any[]>([]);
   const [editingReportId, setEditingReportId] = useState<string | null>(null);
   const [expandedReportId, setExpandedReportId] = useState<string | null>(null);
+  const [tutupBukuModal, setTutupBukuModal] = useState<{isOpen: boolean, startDate: string, endDate: string, batchName: string}>({
+    isOpen: false,
+    startDate: '',
+    endDate: '',
+    batchName: ''
+  });
 
   // Initialize Data
   useEffect(() => {
@@ -46,6 +66,9 @@ function App() {
       
       const savedRep = localStorage.getItem('dimsum_reports');
       if (savedRep) setSavedReports(JSON.parse(savedRep));
+
+      const savedBatches = localStorage.getItem('dimsum_batches');
+      if (savedBatches) setBatches(JSON.parse(savedBatches));
 
       // 2. Sync with Supabase (Source of Truth)
       if (isSupabaseConfigured && supabase) {
@@ -74,6 +97,17 @@ function App() {
           } else if (reportError) {
              console.warn("DB daily_reports error:", reportError.message);
           }
+
+          // Fetch batches
+          const { data: batchData, error: batchError } = await supabase
+            .from('batches')
+            .select('*')
+            .order('created_at', { ascending: false });
+          
+          if (!batchError && batchData) {
+            setBatches(batchData);
+            localStorage.setItem('dimsum_batches', JSON.stringify(batchData));
+          }
         } catch (error) {
           console.error("Gagal sinkronisasi Supabase:", error);
         }
@@ -88,6 +122,11 @@ function App() {
   useEffect(() => {
     localStorage.setItem('dimsum_reports', JSON.stringify(savedReports));
   }, [savedReports]);
+
+  // Save batches to local storage
+  useEffect(() => {
+    localStorage.setItem('dimsum_batches', JSON.stringify(batches));
+  }, [batches]);
 
   // Save to local storage only if not configured
   useEffect(() => {
@@ -332,6 +371,16 @@ function App() {
     
   const balance = totalIncome - totalExpense;
 
+  // Current Dashboard Totals (Only Non-Batched)
+  const currentTransactions = transactions.filter(t => !t.batch_id);
+  const currentTotalIncome = currentTransactions
+    .filter(t => t.type === 'pemasukan')
+    .reduce((sum, t) => sum + t.amount, 0);
+  const currentTotalExpense = currentTransactions
+    .filter(t => t.type === 'pengeluaran')
+    .reduce((sum, t) => sum + t.amount, 0);
+  const currentBalance = currentTotalIncome - currentTotalExpense;
+
   // Report logic
   const addExpenseItem = () => {
     setExpenseItems([...expenseItems, { name: '', amount: '' }]);
@@ -470,6 +519,78 @@ function App() {
     ]);
   };
 
+  const openTutupBukuModal = () => {
+    if (currentTransactions.length === 0) {
+      alert("Tidak ada transaksi untuk ditutup buku.");
+      return;
+    }
+
+    // Sort transactions to get default date range
+    const sorted = [...currentTransactions].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    const startDate = sorted[0].date.split('T')[0];
+    const endDate = sorted[sorted.length - 1].date.split('T')[0];
+    const batchName = `Batch ${batches.length + 1}`;
+
+    setTutupBukuModal({
+      isOpen: true,
+      startDate,
+      endDate,
+      batchName
+    });
+  };
+
+  const handleTutupBuku = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+    
+    const batchData = {
+      batch_name: tutupBukuModal.batchName,
+      start_date: tutupBukuModal.startDate,
+      end_date: tutupBukuModal.endDate,
+      total_income: currentTotalIncome,
+      total_expense: currentTotalExpense,
+      total_balance: currentBalance,
+      created_at: new Date().toISOString()
+    };
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        // 1. Create Batch
+        const { data: newBatch, error: batchError } = await supabase
+          .from('batches')
+          .insert([batchData])
+          .select()
+          .single();
+
+        if (batchError) throw batchError;
+
+        // 2. Update Transactions
+        const { error: transError } = await supabase
+          .from('transactions')
+          .update({ batch_id: newBatch.id })
+          .is('batch_id', null);
+
+        if (transError) throw transError;
+
+        setBatches(prev => [newBatch, ...prev]);
+        setTransactions(prev => prev.map(t => (!t.batch_id ? { ...t, batch_id: newBatch.id } : t)));
+        
+      } catch (err) {
+        console.error("Gagal tutup buku:", err);
+        alert("Gagal melakukan tutup buku di database.");
+      }
+    } else {
+      // LocalStorage Mode
+      const localBatch = { id: Date.now().toString(), ...batchData };
+      setBatches(prev => [localBatch, ...prev]);
+      setTransactions(prev => prev.map(t => (!t.batch_id ? { ...t, batch_id: localBatch.id } : t)));
+    }
+
+    setIsSubmitting(false);
+    setTutupBukuModal({ ...tutupBukuModal, isOpen: false });
+    alert("Tutup buku berhasil!");
+  };
+
   const loadReportToForm = (report: any) => {
     promptPassword('edit_report', report);
   };
@@ -509,18 +630,24 @@ function App() {
         <>
           <section className="dashboard-cards">
             <div className="card balance">
-              <div className="card-title">Total Saldo</div>
+              <div className="card-title">Total Saldo Global</div>
               <div className="card-amount">{formatCurrency(balance)}</div>
             </div>
             <div className="card income">
-              <div className="card-title">Total Pemasukan</div>
-              <div className="card-amount income">{formatCurrency(totalIncome)}</div>
+              <div className="card-title">Pemasukan Periode Ini</div>
+              <div className="card-amount income">{formatCurrency(currentTotalIncome)}</div>
             </div>
             <div className="card expense">
-              <div className="card-title">Total Pengeluaran</div>
-              <div className="card-amount expense">{formatCurrency(totalExpense)}</div>
+              <div className="card-title">Pengeluaran Periode Ini</div>
+              <div className="card-amount expense">{formatCurrency(currentTotalExpense)}</div>
             </div>
           </section>
+
+          <div className="tutup-buku-container">
+            <button className="tutup-buku-btn" onClick={openTutupBukuModal} disabled={isSubmitting}>
+              <span>📤</span> {isSubmitting ? 'Memproses...' : 'Tutup Buku Sekarang'}
+            </button>
+          </div>
 
           <div className="main-content">
             <div className="glass-panel">
@@ -619,11 +746,11 @@ function App() {
 
             <div className="glass-panel">
               <h2 className="panel-title">
-                <span>📋</span> Riwayat Transaksi
+                <span>📋</span> Riwayat Transaksi (Periode Aktif)
               </h2>
-              {transactions.length > 0 ? (
+              {currentTransactions.length > 0 ? (
                 <div className="history-list">
-                  {transactions.map(t => (
+                  {currentTransactions.map(t => (
                     <div key={t.id} className={`history-item ${t.type === 'pemasukan' ? 'income' : 'expense'}`}>
                       <div className="history-info">
                         <div className="history-icon">
@@ -656,8 +783,91 @@ function App() {
                 </div>
               ) : (
                 <div className="empty-state">
-                  Belum ada transaksi yang dicatat.
+                  Belum ada transaksi di periode ini. Silakan catat transaksi baru atau cek riwayat batch di bawah.
                 </div>
+              )}
+            </div>
+          </div>
+
+          <div className="batch-history-section">
+            <div className="glass-panel">
+              <h2 className="panel-title"><span>📚</span> Riwayat Tutup Buku (Batch)</h2>
+              {batches.length > 0 ? (
+                <div className="batch-list">
+                  {batches.map(batch => (
+                    <div key={batch.id} className={`batch-card ${expandedBatchId === batch.id ? 'expanded' : ''}`}>
+                      <div className="batch-header" onClick={() => setExpandedBatchId(expandedBatchId === batch.id ? null : batch.id)}>
+                        <div className="batch-title-group">
+                          <h3>{batch.batch_name}</h3>
+                          <div className="batch-date-range">
+                            {new Date(batch.start_date).toLocaleDateString('id-ID')} - {new Date(batch.end_date).toLocaleDateString('id-ID')}
+                          </div>
+                        </div>
+                        <div className="batch-summary">
+                          <div className="summary-item">
+                            <span className="summary-label">Pemasukan</span>
+                            <span className="summary-value income">{formatCurrency(batch.total_income)}</span>
+                          </div>
+                          <div className="summary-item">
+                            <span className="summary-label">Pengeluaran</span>
+                            <span className="summary-value expense">{formatCurrency(batch.total_expense)}</span>
+                          </div>
+                          <div className="summary-item">
+                            <span className="summary-label">Saldo Batch</span>
+                            <span className="summary-value">{formatCurrency(batch.total_balance)}</span>
+                          </div>
+                          <div className="chevron-icon">▼</div>
+                        </div>
+                      </div>
+                      <div className="batch-details">
+                        <div className="batch-details-grid">
+                          <div>
+                            <h4 style={{ marginBottom: '1rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Detail Transaksi Batch</h4>
+                            <div style={{ overflowX: 'auto' }}>
+                              <table className="batch-transactions-table">
+                                <thead>
+                                  <tr>
+                                    <th>Tanggal</th>
+                                    <th>Keterangan</th>
+                                    <th>Tipe</th>
+                                    <th style={{ textAlign: 'right' }}>Jumlah</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {transactions
+                                    .filter(t => t.batch_id === batch.id)
+                                    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                                    .map(t => (
+                                      <tr key={t.id}>
+                                        <td>{new Date(t.date).toLocaleDateString('id-ID')}</td>
+                                        <td>{t.description}</td>
+                                        <td style={{ color: t.type === 'pemasukan' ? 'var(--income)' : 'var(--expense)' }}>
+                                          {t.type === 'pemasukan' ? 'Pemasukan' : 'Pengeluaran'}
+                                        </td>
+                                        <td style={{ textAlign: 'right', fontWeight: '600' }}>
+                                          {t.type === 'pemasukan' ? '+' : '-'}{formatCurrency(t.amount)}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                </tbody>
+                                <tfoot>
+                                  <tr style={{ background: 'rgba(255,255,255,0.05)' }}>
+                                    <td colSpan={3} style={{ fontWeight: '700', padding: '1rem' }}>TOTAL SALDO BATCH</td>
+                                    <td style={{ textAlign: 'right', fontWeight: '700', padding: '1rem', fontSize: '1rem' }}>
+                                      {formatCurrency(batch.total_balance)}
+                                    </td>
+                                  </tr>
+                                </tfoot>
+                              </table>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="empty-state">Belum ada batch yang ditutup.</div>
               )}
             </div>
           </div>
@@ -846,6 +1056,83 @@ function App() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {tutupBukuModal.isOpen && (
+        <div className="password-modal-overlay">
+          <div className="password-modal-content" style={{ maxWidth: '450px' }}>
+            <h3>Konfirmasi Tutup Buku</h3>
+            <p style={{ marginBottom: '1.5rem', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+              Silakan tinjau rentang tanggal dan nama batch sebelum menutup buku periode ini.
+            </p>
+            
+            <form onSubmit={handleTutupBuku}>
+              <div className="form-group" style={{ marginBottom: '1rem' }}>
+                <label>Nama Batch</label>
+                <input 
+                  type="text" 
+                  className="form-control" 
+                  value={tutupBukuModal.batchName}
+                  onChange={(e) => setTutupBukuModal({...tutupBukuModal, batchName: e.target.value})}
+                  required
+                />
+              </div>
+              
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
+                <div className="form-group">
+                  <label>Tanggal Mulai</label>
+                  <input 
+                    type="date" 
+                    className="form-control" 
+                    value={tutupBukuModal.startDate}
+                    onChange={(e) => setTutupBukuModal({...tutupBukuModal, startDate: e.target.value})}
+                    required
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Tanggal Akhir</label>
+                  <input 
+                    type="date" 
+                    className="form-control" 
+                    value={tutupBukuModal.endDate}
+                    onChange={(e) => setTutupBukuModal({...tutupBukuModal, endDate: e.target.value})}
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="balance-info" style={{ background: 'rgba(255,255,255,0.05)', padding: '1rem', borderRadius: '10px', marginBottom: '1.5rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>Total Pemasukan:</span>
+                  <span style={{ color: 'var(--income)', fontWeight: 'bold' }}>{formatCurrency(currentTotalIncome)}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
+                  <span style={{ color: 'var(--text-secondary)' }}>Total Pengeluaran:</span>
+                  <span style={{ color: 'var(--expense)', fontWeight: 'bold' }}>{formatCurrency(currentTotalExpense)}</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '0.5rem' }}>
+                  <span style={{ fontWeight: 'bold' }}>Total Saldo Batch:</span>
+                  <span style={{ fontWeight: 'bold' }}>{formatCurrency(currentBalance)}</span>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', gap: '1rem' }}>
+                <button type="submit" className="submit-btn" disabled={isSubmitting} style={{ flex: 1, marginTop: 0 }}>
+                  {isSubmitting ? 'Memproses...' : 'Ya, Tutup Buku'}
+                </button>
+                <button 
+                  type="button" 
+                  className="cancel-btn" 
+                  onClick={() => setTutupBukuModal({ ...tutupBukuModal, isOpen: false })} 
+                  style={{ flex: 1, marginTop: 0 }}
+                  disabled={isSubmitting}
+                >
+                  Batal
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

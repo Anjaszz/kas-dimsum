@@ -32,9 +32,12 @@ function App() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [passwordModal, setPasswordModal] = useState<{isOpen: boolean, action: 'edit' | 'delete' | 'edit_report' | 'delete_report' | null, data: any}>({isOpen: false, action: null, data: null});
   const [passwordInput, setPasswordInput] = useState('');
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'report'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'report' | 'profit'>('dashboard');
   const [batches, setBatches] = useState<Batch[]>([]);
+  const [profitTransactions, setProfitTransactions] = useState<Transaction[]>([]);
+  const [profitBatches, setProfitBatches] = useState<Batch[]>([]);
   const [expandedBatchId, setExpandedBatchId] = useState<string | null>(null);
+  const [expandedProfitBatchId, setExpandedProfitBatchId] = useState<string | null>(null);
 
   // Daily Report State
   const [grossIncome, setGrossIncome] = useState<string>('');
@@ -70,6 +73,12 @@ function App() {
       const savedBatches = localStorage.getItem('dimsum_batches');
       if (savedBatches) setBatches(JSON.parse(savedBatches));
 
+      const savedProfitTrans = localStorage.getItem('dimsum_profit_transactions');
+      if (savedProfitTrans) setProfitTransactions(JSON.parse(savedProfitTrans));
+
+      const savedProfitBatches = localStorage.getItem('dimsum_profit_batches');
+      if (savedProfitBatches) setProfitBatches(JSON.parse(savedProfitBatches));
+
       // 2. Sync with Supabase (Source of Truth)
       if (isSupabaseConfigured && supabase) {
         try {
@@ -91,11 +100,8 @@ function App() {
             .order('date', { ascending: false });
           
           if (!reportError && reportData) {
-            console.log("Syncing reports from DB:", reportData.length, "found");
             setSavedReports(reportData);
             localStorage.setItem('dimsum_reports', JSON.stringify(reportData));
-          } else if (reportError) {
-             console.warn("DB daily_reports error:", reportError.message);
           }
 
           // Fetch batches
@@ -107,6 +113,28 @@ function App() {
           if (!batchError && batchData) {
             setBatches(batchData);
             localStorage.setItem('dimsum_batches', JSON.stringify(batchData));
+          }
+
+          // Fetch profit transactions
+          const { data: profitTransData, error: profitTransError } = await supabase
+            .from('profit_transactions')
+            .select('*')
+            .order('date', { ascending: false });
+          
+          if (!profitTransError && profitTransData) {
+            setProfitTransactions(profitTransData);
+            localStorage.setItem('dimsum_profit_transactions', JSON.stringify(profitTransData));
+          }
+
+          // Fetch profit batches
+          const { data: profitBatchData, error: profitBatchError } = await supabase
+            .from('profit_batches')
+            .select('*')
+            .order('created_at', { ascending: false });
+          
+          if (!profitBatchError && profitBatchData) {
+            setProfitBatches(profitBatchData);
+            localStorage.setItem('dimsum_profit_batches', JSON.stringify(profitBatchData));
           }
         } catch (error) {
           console.error("Gagal sinkronisasi Supabase:", error);
@@ -127,6 +155,15 @@ function App() {
   useEffect(() => {
     localStorage.setItem('dimsum_batches', JSON.stringify(batches));
   }, [batches]);
+
+  // Save profit data to local storage
+  useEffect(() => {
+    localStorage.setItem('dimsum_profit_transactions', JSON.stringify(profitTransactions));
+  }, [profitTransactions]);
+
+  useEffect(() => {
+    localStorage.setItem('dimsum_profit_batches', JSON.stringify(profitBatches));
+  }, [profitBatches]);
 
   // Save to local storage only if not configured
   useEffect(() => {
@@ -175,7 +212,11 @@ function App() {
         setImageFile(null);
         window.scrollTo({ top: 0, behavior: 'smooth' });
       } else if (passwordModal.action === 'delete') {
-        executeDelete(passwordModal.data as string);
+        if (activeTab === 'profit') {
+          executeDeleteProfit(passwordModal.data as string);
+        } else {
+          executeDelete(passwordModal.data as string);
+        }
       } else if (passwordModal.action === 'edit_report') {
         const report = passwordModal.data;
         setEditingReportId(report.id);
@@ -220,6 +261,25 @@ function App() {
     }
     
     setTransactions(prev => prev.filter(t => t.id !== id));
+  };
+
+  const executeDeleteProfit = async (id: string) => {
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { error } = await supabase
+          .from('profit_transactions')
+          .delete()
+          .eq('id', id);
+        
+        if (error) throw error;
+      } catch (err) {
+        console.error("Gagal menghapus profit:", err);
+        alert("Gagal menghapus transaksi profit dari database.");
+        return;
+      }
+    }
+    
+    setProfitTransactions(prev => prev.filter(t => t.id !== id));
   };
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -275,17 +335,18 @@ function App() {
         }
 
         // 2. Insert atau Update ke Database
+        const tableName = activeTab === 'profit' ? 'profit_transactions' : 'transactions';
         const dbTransactionData = {
-          type,
+          type: activeTab === 'profit' ? 'pemasukan' : type,
           amount: numericAmount,
           date,
-          description: description || (type === 'pemasukan' ? 'Pemasukan' : 'Pengeluaran'),
+          description: description || (activeTab === 'profit' ? 'Profit Bulanan' : (type === 'pemasukan' ? 'Pemasukan' : 'Pengeluaran')),
           image: imageUrl ? imageUrl : (editingId && !imageFile ? finalBase64Preview : null)
         };
 
         if (editingId) {
           const { error: updateError } = await supabase
-            .from('transactions')
+            .from(tableName)
             .update(dbTransactionData)
             .eq('id', editingId);
             
@@ -295,10 +356,14 @@ function App() {
             setIsSubmitting(false);
             return;
           }
-          setTransactions(prev => prev.map(t => t.id === editingId ? { ...t, ...dbTransactionData, id: editingId } : t));
+          if (activeTab === 'profit') {
+            setProfitTransactions(prev => prev.map(t => t.id === editingId ? { ...t, ...dbTransactionData, id: editingId } : t));
+          } else {
+            setTransactions(prev => prev.map(t => t.id === editingId ? { ...t, ...dbTransactionData, id: editingId } : t));
+          }
         } else {
           const { data: insertedData, error: insertError } = await supabase
-            .from('transactions')
+            .from(tableName)
             .insert([dbTransactionData])
             .select()
             .single();
@@ -311,7 +376,11 @@ function App() {
           }
           
           // Simpan state dengan ID dari supabase
-          setTransactions(prev => [insertedData, ...prev]);
+          if (activeTab === 'profit') {
+            setProfitTransactions(prev => [insertedData, ...prev]);
+          } else {
+            setTransactions(prev => [insertedData, ...prev]);
+          }
         }
 
       } catch (err) {
@@ -322,21 +391,29 @@ function App() {
     } else {
       // Localstorage fallback mode
       const transactionData = {
-        type,
+        type: activeTab === 'profit' ? 'pemasukan' : type,
         amount: numericAmount,
         date,
-        description: description || (type === 'pemasukan' ? 'Pemasukan' : 'Pengeluaran'),
+        description: description || (activeTab === 'profit' ? 'Profit Bulanan' : (type === 'pemasukan' ? 'Pemasukan' : 'Pengeluaran')),
         image: finalBase64Preview
       };
 
       if (editingId) {
-        setTransactions(prev => prev.map(t => t.id === editingId ? { ...t, ...transactionData, id: editingId } : t));
+        if (activeTab === 'profit') {
+          setProfitTransactions(prev => prev.map(t => t.id === editingId ? { ...t, ...transactionData, id: editingId } : t));
+        } else {
+          setTransactions(prev => prev.map(t => t.id === editingId ? { ...t, ...transactionData, id: editingId } : t));
+        }
       } else {
         const newTransaction: Transaction = {
           id: Date.now().toString(),
           ...transactionData
         };
-        setTransactions(prev => [newTransaction, ...prev]);
+        if (activeTab === 'profit') {
+          setProfitTransactions(prev => [newTransaction, ...prev]);
+        } else {
+          setTransactions(prev => [newTransaction, ...prev]);
+        }
       }
     }
     
@@ -380,6 +457,14 @@ function App() {
     .filter(t => t.type === 'pengeluaran')
     .reduce((sum, t) => sum + t.amount, 0);
   const currentBalance = currentTotalIncome - currentTotalExpense;
+
+  // Profit Tab Calculations
+  const allTimeProfit = profitTransactions
+    .filter(t => t.type === 'pemasukan')
+    .reduce((sum, t) => sum + t.amount, 0);
+  
+  const currentProfitTransactions = profitTransactions.filter(t => !t.batch_id);
+  const currentPeriodProfit = currentProfitTransactions.reduce((sum, t) => sum + t.amount, 0);
 
   // Report logic
   const addExpenseItem = () => {
@@ -591,6 +676,59 @@ function App() {
     alert("Tutup buku berhasil!");
   };
 
+  const handleTutupBukuProfit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (currentProfitTransactions.length === 0) {
+      alert("Tidak ada profit untuk ditutup buku.");
+      return;
+    }
+    setIsSubmitting(true);
+    
+    const batchData = {
+      batch_name: tutupBukuModal.batchName,
+      start_date: tutupBukuModal.startDate,
+      end_date: tutupBukuModal.endDate,
+      total_income: currentPeriodProfit,
+      total_expense: 0,
+      total_balance: currentPeriodProfit,
+      created_at: new Date().toISOString()
+    };
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { data: newBatch, error: batchError } = await supabase
+          .from('profit_batches')
+          .insert([batchData])
+          .select()
+          .single();
+
+        if (batchError) throw batchError;
+
+        const { error: transError } = await supabase
+          .from('profit_transactions')
+          .update({ batch_id: newBatch.id })
+          .is('batch_id', null);
+
+        if (transError) throw transError;
+
+        setProfitBatches(prev => [newBatch, ...prev]);
+        setProfitTransactions(prev => prev.map(t => (!t.batch_id ? { ...t, batch_id: newBatch.id } : t)));
+        
+      } catch (err) {
+        console.error("Gagal tutup buku profit:", err);
+        alert("Gagal melakukan tutup buku profit di database.");
+      }
+    } else {
+      const localBatch = { id: Date.now().toString(), ...batchData };
+      setProfitBatches(prev => [localBatch, ...prev]);
+      setProfitTransactions(prev => prev.map(t => (!t.batch_id ? { ...t, batch_id: localBatch.id } : t)));
+    }
+
+    setIsSubmitting(false);
+    setTutupBukuModal({ ...tutupBukuModal, isOpen: false });
+    alert("Tutup buku profit berhasil!");
+  };
+
   const loadReportToForm = (report: any) => {
     promptPassword('edit_report', report);
   };
@@ -598,8 +736,8 @@ function App() {
   return (
     <div className="app-container">
       <header>
-        <h1>Rasa Terakhir</h1>
-        <p>Dashboard Arus Kas Dimsum</p>
+        <h1>Dimsum Anjas</h1>
+        <p>Dashboard Arus Kas & Profit</p>
         {!isSupabaseConfigured && (
           <div style={{ marginTop: '1rem', padding: '0.8rem', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid var(--expense)', borderRadius: '8px', color: '#fca5a5', fontSize: '0.85rem' }}>
             <strong>Catatan:</strong> Koneksi Supabase belum dikonfigurasi. Mode saat ini menyimpan semua data menggunakan Local Storage di perangkat Anda.
@@ -613,6 +751,15 @@ function App() {
           onClick={() => setActiveTab('dashboard')}
         >
           📊 Dashboard Kas
+        </button>
+        <button 
+          className={`nav-btn ${activeTab === 'profit' ? 'active' : ''}`}
+          onClick={() => {
+            setActiveTab('profit');
+            setType('pemasukan'); // Always income in profit tab
+          }}
+        >
+          💰 Profit
         </button>
         <button 
           className={`nav-btn ${activeTab === 'report' ? 'active' : ''}`}
@@ -630,7 +777,7 @@ function App() {
         <>
           <section className="dashboard-cards">
             <div className="card balance">
-              <div className="card-title">Total Saldo Global</div>
+              <div className="card-title">Total Saldo Global (Kas)</div>
               <div className="card-amount">{formatCurrency(balance)}</div>
             </div>
             <div className="card income">
@@ -791,7 +938,7 @@ function App() {
 
           <div className="batch-history-section">
             <div className="glass-panel">
-              <h2 className="panel-title"><span>📚</span> Riwayat Tutup Buku (Batch)</h2>
+              <h2 className="panel-title"><span>📚</span> Riwayat Tutup Buku (Batch Kas)</h2>
               {batches.length > 0 ? (
                 <div className="batch-list">
                   {batches.map(batch => (
@@ -799,75 +946,234 @@ function App() {
                       <div className="batch-header" onClick={() => setExpandedBatchId(expandedBatchId === batch.id ? null : batch.id)}>
                         <div className="batch-title-group">
                           <h3>{batch.batch_name}</h3>
-                          <div className="batch-date-range">
-                            {new Date(batch.start_date).toLocaleDateString('id-ID')} - {new Date(batch.end_date).toLocaleDateString('id-ID')}
-                          </div>
+                          <p className="batch-date-range">
+                            {new Date(batch.start_date).toLocaleDateString()} - {new Date(batch.end_date).toLocaleDateString()}
+                          </p>
                         </div>
                         <div className="batch-summary">
                           <div className="summary-item">
-                            <span className="summary-label">Pemasukan</span>
-                            <span className="summary-value income">{formatCurrency(batch.total_income)}</span>
-                          </div>
-                          <div className="summary-item">
-                            <span className="summary-label">Pengeluaran</span>
-                            <span className="summary-value expense">{formatCurrency(batch.total_expense)}</span>
-                          </div>
-                          <div className="summary-item">
-                            <span className="summary-label">Saldo Batch</span>
+                            <span className="summary-label">Saldo</span>
                             <span className="summary-value">{formatCurrency(batch.total_balance)}</span>
                           </div>
-                          <div className="chevron-icon">▼</div>
+                          <div className={`expand-icon ${expandedBatchId === batch.id ? 'active' : ''}`}>▼</div>
                         </div>
                       </div>
-                      <div className="batch-details">
-                        <div className="batch-details-grid">
-                          <div>
-                            <h4 style={{ marginBottom: '1rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>Detail Transaksi Batch</h4>
-                            <div style={{ overflowX: 'auto' }}>
-                              <table className="batch-transactions-table">
-                                <thead>
-                                  <tr>
-                                    <th>Tanggal</th>
-                                    <th>Keterangan</th>
-                                    <th>Tipe</th>
-                                    <th style={{ textAlign: 'right' }}>Jumlah</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {transactions
-                                    .filter(t => t.batch_id === batch.id)
-                                    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-                                    .map(t => (
-                                      <tr key={t.id}>
-                                        <td>{new Date(t.date).toLocaleDateString('id-ID')}</td>
-                                        <td>{t.description}</td>
-                                        <td style={{ color: t.type === 'pemasukan' ? 'var(--income)' : 'var(--expense)' }}>
-                                          {t.type === 'pemasukan' ? 'Pemasukan' : 'Pengeluaran'}
-                                        </td>
-                                        <td style={{ textAlign: 'right', fontWeight: '600' }}>
-                                          {t.type === 'pemasukan' ? '+' : '-'}{formatCurrency(t.amount)}
-                                        </td>
-                                      </tr>
-                                    ))}
-                                </tbody>
-                                <tfoot>
-                                  <tr style={{ background: 'rgba(255,255,255,0.05)' }}>
-                                    <td colSpan={3} style={{ fontWeight: '700', padding: '1rem' }}>TOTAL SALDO BATCH</td>
-                                    <td style={{ textAlign: 'right', fontWeight: '700', padding: '1rem', fontSize: '1rem' }}>
-                                      {formatCurrency(batch.total_balance)}
-                                    </td>
-                                  </tr>
-                                </tfoot>
-                              </table>
+                      
+                      {expandedBatchId === batch.id && (
+                        <div className="batch-details">
+                          <div className="batch-mini-stats">
+                            <div className="mini-stat income">
+                              <span>Pemasukan:</span>
+                              <strong>{formatCurrency(batch.total_income)}</strong>
+                            </div>
+                            <div className="mini-stat expense">
+                              <span>Pengeluaran:</span>
+                              <strong>{formatCurrency(batch.total_expense)}</strong>
                             </div>
                           </div>
+                          <div className="batch-transactions-list">
+                            {transactions
+                              .filter(t => t.batch_id === batch.id)
+                              .map(t => (
+                                <div key={t.id} className="batch-trans-item">
+                                  <span className="trans-desc">{t.description}</span>
+                                  <span className={`trans-amt ${t.type === 'pemasukan' ? 'income' : 'expense'}`}>
+                                    {t.type === 'pemasukan' ? '+' : '-'}{new Intl.NumberFormat('id-ID').format(t.amount)}
+                                  </span>
+                                </div>
+                              ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="empty-state">Belum ada riwayat tutup buku kas.</div>
+              )}
+            </div>
+          </div>
+        </>
+      ) : activeTab === 'profit' ? (
+        <>
+          <section className="dashboard-cards">
+            <div className="card balance">
+              <div className="card-title">Total Keuntungan All-Time</div>
+              <div className="card-amount">{formatCurrency(allTimeProfit)}</div>
+            </div>
+            <div className="card income">
+              <div className="card-title">Profit Periode Ini (Belum Tutup Buku)</div>
+              <div className="card-amount income">{formatCurrency(currentPeriodProfit)}</div>
+            </div>
+          </section>
+
+          <div className="tutup-buku-container">
+            <button className="tutup-buku-btn" onClick={() => {
+              if (currentProfitTransactions.length === 0) {
+                alert("Tidak ada profit untuk ditutup buku.");
+                return;
+              }
+              const sorted = [...currentProfitTransactions].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+              const startDate = sorted[0].date.split('T')[0];
+              const endDate = sorted[sorted.length - 1].date.split('T')[0];
+              const batchName = `Profit Batch ${profitBatches.length + 1}`;
+              setTutupBukuModal({ isOpen: true, startDate, endDate, batchName });
+            }} disabled={isSubmitting}>
+              <span>📤</span> {isSubmitting ? 'Memproses...' : 'Tutup Buku Profit Bulan Ini'}
+            </button>
+          </div>
+
+          <div className="main-content">
+            <div className="glass-panel">
+              <h2 className="panel-title">
+                <span>💰</span> {editingId ? 'Edit Catatan Profit' : 'Catat Keuntungan'}
+              </h2>
+              <form className="transaction-form" onSubmit={handleSubmit}>
+                <div className="form-group">
+                  <label>Jumlah Keuntungan (Rp)*</label>
+                  <input
+                    type="text"
+                    className="form-control"
+                    value={amount}
+                    onChange={(e) => {
+                      const rawValue = e.target.value.replace(/[^0-9]/g, '');
+                      if (!rawValue) {
+                        setAmount('');
+                        return;
+                      }
+                      const formattedValue = new Intl.NumberFormat('id-ID').format(Number(rawValue));
+                      setAmount(formattedValue);
+                    }}
+                    placeholder="Contoh: 1.000.000"
+                    required
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Tanggal & Waktu*</label>
+                  <input
+                    type="datetime-local"
+                    className="form-control"
+                    value={date}
+                    onChange={(e) => setDate(e.target.value)}
+                    required
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Keterangan Profit (Opsional)</label>
+                  <input
+                    type="text"
+                    className="form-control"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    placeholder="Contoh: Profit Bersih Maret 2024"
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Foto/Bukti (Opsional)</label>
+                  <input
+                    type="file"
+                    id="image-input"
+                    className="form-control"
+                    accept="image/*"
+                    onChange={handleImageChange}
+                  />
+                  {imagePreview && (
+                    <div style={{ marginTop: '0.5rem' }}>
+                      <img src={imagePreview} alt="Preview" style={{ width: '100%', height: '140px', objectFit: 'cover', borderRadius: '10px' }} />
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
+                  <button type="submit" className="submit-btn" disabled={isSubmitting} style={{ flex: 1, marginTop: 0 }}>
+                    {isSubmitting ? 'Menyimpan...' : (editingId ? 'Update Profit' : 'Simpan Profit')}
+                  </button>
+                  {editingId && (
+                    <button type="button" className="cancel-btn" onClick={handleCancelEdit} style={{ flex: 1, marginTop: 0 }}>
+                      Batal
+                    </button>
+                  )}
+                </div>
+              </form>
+            </div>
+
+            <div className="glass-panel">
+              <h2 className="panel-title">
+                <span>📋</span> Riwayat Profit (Periode Aktif)
+              </h2>
+              {currentProfitTransactions.length > 0 ? (
+                <div className="history-list">
+                  {currentProfitTransactions.map(t => (
+                    <div key={t.id} className="history-item income">
+                      <div className="history-info">
+                        <div className="history-icon">💰</div>
+                        <div className="history-details">
+                          <h4>{t.description}</h4>
+                          <p>{formatDate(t.date)}</p>
+                        </div>
+                      </div>
+                      <div className="history-amount-container">
+                        <div className="history-amount income">
+                          +{formatCurrency(t.amount)}
+                        </div>
+                        <div className="history-actions">
+                          <button className="action-btn edit" onClick={() => promptPassword('edit', t)}>Edit</button>
+                          <button className="action-btn delete" onClick={() => promptPassword('delete', t.id)}>Hapus</button>
                         </div>
                       </div>
                     </div>
                   ))}
                 </div>
               ) : (
-                <div className="empty-state">Belum ada batch yang ditutup.</div>
+                <div className="empty-state">Belum ada catatan profit di periode ini.</div>
+              )}
+            </div>
+          </div>
+
+          <div className="batch-history-section">
+            <div className="glass-panel">
+              <h2 className="panel-title"><span>📚</span> Riwayat Tutup Buku Profit</h2>
+              {profitBatches.length > 0 ? (
+                <div className="batch-list">
+                  {profitBatches.map(batch => (
+                    <div key={batch.id} className={`batch-card ${expandedProfitBatchId === batch.id ? 'expanded' : ''}`}>
+                      <div className="batch-header" onClick={() => setExpandedProfitBatchId(expandedProfitBatchId === batch.id ? null : batch.id)}>
+                        <div className="batch-title-group">
+                          <h3>{batch.batch_name}</h3>
+                          <p className="batch-date-range">
+                            {new Date(batch.start_date).toLocaleDateString()} - {new Date(batch.end_date).toLocaleDateString()}
+                          </p>
+                        </div>
+                        <div className="batch-summary">
+                          <div className="summary-item">
+                            <span className="summary-label">Total Profit</span>
+                            <span className="summary-value">{formatCurrency(batch.total_balance)}</span>
+                          </div>
+                          <div className={`expand-icon ${expandedProfitBatchId === batch.id ? 'active' : ''}`}>▼</div>
+                        </div>
+                      </div>
+                      {expandedProfitBatchId === batch.id && (
+                        <div className="batch-details">
+                          <div className="batch-transactions-list">
+                            {profitTransactions
+                              .filter(t => t.batch_id === batch.id)
+                              .map(t => (
+                                <div key={t.id} className="batch-trans-item">
+                                  <span className="trans-desc">{t.description}</span>
+                                  <span className="trans-amt income">+{new Intl.NumberFormat('id-ID').format(t.amount)}</span>
+                                </div>
+                              ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="empty-state">Belum ada riwayat tutup buku profit.</div>
               )}
             </div>
           </div>
@@ -938,7 +1244,7 @@ function App() {
               
               <div className="report-preview" id="printable-report">
                 <div style={{ textAlign: 'center', marginBottom: '1.5rem', borderBottom: '1px dashed rgba(255,255,255,0.1)', paddingBottom: '1rem' }}>
-                  <h3 style={{ margin: 0 }}>RASA TERAKHIR</h3>
+                  <h3 style={{ margin: 0 }}>DIMSUM ANJAS</h3>
                   <p style={{ fontSize: '0.8rem', margin: '5px 0' }}>Laporan Penghasilan Harian</p>
                   <p style={{ fontSize: '0.9rem', fontWeight: '600' }}>
                     tgl {new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(reportDate))}
@@ -1063,12 +1369,12 @@ function App() {
       {tutupBukuModal.isOpen && (
         <div className="password-modal-overlay">
           <div className="password-modal-content" style={{ maxWidth: '450px' }}>
-            <h3>Konfirmasi Tutup Buku</h3>
+            <h3>Konfirmasi Tutup Buku {activeTab === 'profit' ? 'Profit' : 'Kas'}</h3>
             <p style={{ marginBottom: '1.5rem', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
               Silakan tinjau rentang tanggal dan nama batch sebelum menutup buku periode ini.
             </p>
             
-            <form onSubmit={handleTutupBuku}>
+            <form onSubmit={activeTab === 'profit' ? handleTutupBukuProfit : handleTutupBuku}>
               <div className="form-group" style={{ marginBottom: '1rem' }}>
                 <label>Nama Batch</label>
                 <input 
@@ -1104,18 +1410,27 @@ function App() {
               </div>
 
               <div className="balance-info" style={{ background: 'rgba(255,255,255,0.05)', padding: '1rem', borderRadius: '10px', marginBottom: '1.5rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
-                  <span style={{ color: 'var(--text-secondary)' }}>Total Pemasukan:</span>
-                  <span style={{ color: 'var(--income)', fontWeight: 'bold' }}>{formatCurrency(currentTotalIncome)}</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
-                  <span style={{ color: 'var(--text-secondary)' }}>Total Pengeluaran:</span>
-                  <span style={{ color: 'var(--expense)', fontWeight: 'bold' }}>{formatCurrency(currentTotalExpense)}</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '0.5rem' }}>
-                  <span style={{ fontWeight: 'bold' }}>Total Saldo Batch:</span>
-                  <span style={{ fontWeight: 'bold' }}>{formatCurrency(currentBalance)}</span>
-                </div>
+                {activeTab === 'profit' ? (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '0.5rem' }}>
+                    <span style={{ fontWeight: 'bold' }}>Total Profit:</span>
+                    <span style={{ fontWeight: 'bold', color: 'var(--income)' }}>{formatCurrency(currentPeriodProfit)}</span>
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
+                      <span style={{ color: 'var(--text-secondary)' }}>Total Pemasukan:</span>
+                      <span style={{ color: 'var(--income)', fontWeight: 'bold' }}>{formatCurrency(currentTotalIncome)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
+                      <span style={{ color: 'var(--text-secondary)' }}>Total Pengeluaran:</span>
+                      <span style={{ color: 'var(--expense)', fontWeight: 'bold' }}>{formatCurrency(currentTotalExpense)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '0.5rem' }}>
+                      <span style={{ fontWeight: 'bold' }}>Total Saldo Batch:</span>
+                      <span style={{ fontWeight: 'bold' }}>{formatCurrency(currentBalance)}</span>
+                    </div>
+                  </>
+                )}
               </div>
 
               <div style={{ display: 'flex', gap: '1rem' }}>

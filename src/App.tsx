@@ -1002,7 +1002,7 @@ function App() {
               <div className="card-amount">{formatCurrency(allTimeProfit)}</div>
             </div>
             <div className="card income">
-              <div className="card-title">Profit Periode Ini (Belum Tutup Buku)</div>
+              <div className="card-title">Profit Bulan Ini</div>
               <div className="card-amount income">{formatCurrency(currentPeriodProfit)}</div>
             </div>
           </section>

@@ -1,29 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import './App.css';
 import { supabase, isSupabaseConfigured } from './supabase';
-
-type TransactionType = 'pemasukan' | 'pengeluaran';
-
-interface Transaction {
-  id: string;
-  type: TransactionType;
-  amount: number;
-  date: string;
-  description: string;
-  image: string | null;
-  batch_id?: string | null;
-}
-
-interface Batch {
-  id: string;
-  batch_name: string;
-  start_date: string;
-  end_date: string;
-  total_income: number;
-  total_expense: number;
-  total_balance: number;
-  created_at: string;
-}
+import type { Transaction, Batch, EmployeeBatch, TransactionType } from './types';
+import { PasswordModal } from './components/PasswordModal';
+import { ImageModal } from './components/ImageModal';
+import { TutupBukuModal } from './components/TutupBukuModal';
+import { TutupBukuKaryawanModal } from './components/TutupBukuKaryawanModal';
+import { DashboardPage } from './pages/DashboardPage';
+import { ProfitPage } from './pages/ProfitPage';
+import { EmployeePage } from './pages/EmployeePage';
 
 function App() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -42,12 +27,6 @@ function App() {
   // Daily Report State
   const [grossIncome, setGrossIncome] = useState<string>('');
   const [reportDate, setReportDate] = useState<string>(new Date().toISOString().split('T')[0]);
-  const [expenseItems, setExpenseItems] = useState<{ name: string; amount: string }[]>([
-    { name: 'Masuk Kas', amount: '' },
-    { name: 'Karyawan', amount: '' },
-    { name: 'Kontrakan', amount: '' },
-    { name: 'Gas', amount: '' },
-  ]);
   const [savedReports, setSavedReports] = useState<any[]>([]);
   const [editingReportId, setEditingReportId] = useState<string | null>(null);
   const [expandedReportId, setExpandedReportId] = useState<string | null>(null);
@@ -58,12 +37,54 @@ function App() {
     batchName: ''
   });
 
+  // Employee Sales & Performance State
+  const [employees, setEmployees] = useState<string[]>(() => {
+    const saved = localStorage.getItem('dimsum_employees');
+    return saved ? JSON.parse(saved) : ['Sabrina', 'Tiara'];
+  });
+  const [selectedEmployees, setSelectedEmployees] = useState<string[]>([]);
+  const [newEmployeeName, setNewEmployeeName] = useState<string>('');
+  const [employeeBatches, setEmployeeBatches] = useState<EmployeeBatch[]>(() => {
+    const saved = localStorage.getItem('dimsum_employee_batches');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [tutupBukuKaryawanModal, setTutupBukuKaryawanModal] = useState<{isOpen: boolean, startDate: string, endDate: string, batchName: string}>({
+    isOpen: false,
+    startDate: '',
+    endDate: '',
+    batchName: ''
+  });
+  const [expandedEmpBatchId, setExpandedEmpBatchId] = useState<string | null>(null);
+  const [expandedEmployeeCard, setExpandedEmployeeCard] = useState<string | null>(null);
+  const [editingEmployeeName, setEditingEmployeeName] = useState<string | null>(null);
+  const [editEmployeeInput, setEditEmployeeInput] = useState<string>('');
+
+  const [type, setType] = useState<TransactionType>('pemasukan');
+  const [amount, setAmount] = useState<string>('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const getLocalDateTime = () => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    return `${year}-${month}-${day}T${hours}:${minutes}`;
+  };
+
+  const [date, setDate] = useState<string>(getLocalDateTime());
+  const [description, setDescription] = useState<string>('');
+  
+  // Storage logic
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [imageFile, setImageFile] = useState<File | null>(null);
+
   // Initialize Data
   useEffect(() => {
     const loadData = async () => {
       setIsLoading(true);
       
-      // 1. Load from LocalStorage first (for quick initial display)
       const savedTrans = localStorage.getItem('dimsum_transactions');
       if (savedTrans) setTransactions(JSON.parse(savedTrans));
       
@@ -79,10 +100,8 @@ function App() {
       const savedProfitBatches = localStorage.getItem('dimsum_profit_batches');
       if (savedProfitBatches) setProfitBatches(JSON.parse(savedProfitBatches));
 
-      // 2. Sync with Supabase (Source of Truth)
       if (isSupabaseConfigured && supabase) {
         try {
-          // Fetch transactions
           const { data: transData, error: transError } = await supabase
             .from('transactions')
             .select('*')
@@ -93,7 +112,6 @@ function App() {
             localStorage.setItem('dimsum_transactions', JSON.stringify(transData));
           }
 
-          // Fetch reports
           const { data: reportData, error: reportError } = await supabase
             .from('daily_reports')
             .select('*')
@@ -104,7 +122,6 @@ function App() {
             localStorage.setItem('dimsum_reports', JSON.stringify(reportData));
           }
 
-          // Fetch batches
           const { data: batchData, error: batchError } = await supabase
             .from('batches')
             .select('*')
@@ -115,7 +132,6 @@ function App() {
             localStorage.setItem('dimsum_batches', JSON.stringify(batchData));
           }
 
-          // Fetch profit transactions
           const { data: profitTransData, error: profitTransError } = await supabase
             .from('profit_transactions')
             .select('*')
@@ -126,7 +142,6 @@ function App() {
             localStorage.setItem('dimsum_profit_transactions', JSON.stringify(profitTransData));
           }
 
-          // Fetch profit batches
           const { data: profitBatchData, error: profitBatchError } = await supabase
             .from('profit_batches')
             .select('*')
@@ -156,6 +171,16 @@ function App() {
     localStorage.setItem('dimsum_batches', JSON.stringify(batches));
   }, [batches]);
 
+  // Save employees to local storage
+  useEffect(() => {
+    localStorage.setItem('dimsum_employees', JSON.stringify(employees));
+  }, [employees]);
+
+  // Save employee batches to local storage
+  useEffect(() => {
+    localStorage.setItem('dimsum_employee_batches', JSON.stringify(employeeBatches));
+  }, [employeeBatches]);
+
   // Save profit data to local storage
   useEffect(() => {
     localStorage.setItem('dimsum_profit_transactions', JSON.stringify(profitTransactions));
@@ -171,27 +196,6 @@ function App() {
       localStorage.setItem('dimsum_transactions', JSON.stringify(transactions));
     }
   }, [transactions]);
-
-  const [type, setType] = useState<TransactionType>('pemasukan');
-  const [amount, setAmount] = useState<string>('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  
-  const getLocalDateTime = () => {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const day = String(now.getDate()).padStart(2, '0');
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    return `${year}-${month}-${day}T${hours}:${minutes}`;
-  };
-
-  const [date, setDate] = useState<string>(getLocalDateTime());
-  const [description, setDescription] = useState<string>('');
-  
-  // Storage logic
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
-  const [imageFile, setImageFile] = useState<File | null>(null);
 
   const promptPassword = (action: 'edit' | 'delete' | 'edit_report' | 'delete_report', data: any) => {
     setPasswordModal({ isOpen: true, action, data });
@@ -222,7 +226,10 @@ function App() {
         setEditingReportId(report.id);
         setReportDate(report.date);
         setGrossIncome(new Intl.NumberFormat('id-ID').format(report.gross));
-        setExpenseItems(report.expenses);
+        const reportEmps = report.expenses 
+          ? report.expenses.map((e: any) => e.name).filter(Boolean) 
+          : [];
+        setSelectedEmployees(reportEmps);
         window.scrollTo({ top: 0, behavior: 'smooth' });
       } else if (passwordModal.action === 'delete_report') {
         executeDeleteReport(passwordModal.data as string);
@@ -306,11 +313,10 @@ function App() {
 
     setIsSubmitting(true);
     let imageUrl: string | null = null;
-    let finalBase64Preview = imagePreview; // Digunakan sebagai fallback
+    let finalBase64Preview = imagePreview;
 
     if (isSupabaseConfigured && supabase) {
       try {
-        // 1. Upload ke Storage jika ada File
         if (imageFile) {
           const fileExt = imageFile.name.split('.').pop();
           const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
@@ -324,7 +330,7 @@ function App() {
             console.error("Upload error:", uploadError);
             alert("Gagal mengupload gambar struk ke Supabase Storage.");
             setIsSubmitting(false);
-            return; // hentikan save DB jika upload foto error
+            return;
           }
 
           const { data: publicUrlData } = supabase.storage
@@ -334,7 +340,6 @@ function App() {
           imageUrl = publicUrlData.publicUrl;
         }
 
-        // 2. Insert atau Update ke Database
         const tableName = activeTab === 'profit' ? 'profit_transactions' : 'transactions';
         const dbTransactionData = {
           type: activeTab === 'profit' ? 'pemasukan' : type,
@@ -375,7 +380,6 @@ function App() {
             return;
           }
           
-          // Simpan state dengan ID dari supabase
           if (activeTab === 'profit') {
             setProfitTransactions(prev => [insertedData, ...prev]);
           } else {
@@ -389,7 +393,6 @@ function App() {
         return;
       }
     } else {
-      // Localstorage fallback mode
       const transactionData = {
         type: activeTab === 'profit' ? 'pemasukan' : type,
         amount: numericAmount,
@@ -417,7 +420,6 @@ function App() {
       }
     }
     
-    // Reset Form
     handleCancelEdit();
     setIsSubmitting(false);
   };
@@ -448,7 +450,6 @@ function App() {
     
   const balance = totalIncome - totalExpense;
 
-  // Current Dashboard Totals (Only Non-Batched)
   const currentTransactions = transactions.filter(t => !t.batch_id);
   const currentTotalIncome = currentTransactions
     .filter(t => t.type === 'pemasukan')
@@ -458,7 +459,6 @@ function App() {
     .reduce((sum, t) => sum + t.amount, 0);
   const currentBalance = currentTotalIncome - currentTotalExpense;
 
-  // Profit Tab Calculations
   const allTimeProfit = profitTransactions
     .filter(t => t.type === 'pemasukan')
     .reduce((sum, t) => sum + t.amount, 0);
@@ -466,62 +466,173 @@ function App() {
   const currentProfitTransactions = profitTransactions.filter(t => !t.batch_id);
   const currentPeriodProfit = currentProfitTransactions.reduce((sum, t) => sum + t.amount, 0);
 
-  // Report logic
-  const addExpenseItem = () => {
-    setExpenseItems([...expenseItems, { name: '', amount: '' }]);
+  // Helper to extract employee names from a report record
+  const getReportEmployees = (report: any): string[] => {
+    if (!report || !report.expenses || !Array.isArray(report.expenses)) return [];
+    return report.expenses
+      .filter((exp: any) => exp && typeof exp === 'object' && exp.name && !('amount' in exp))
+      .map((exp: any) => exp.name);
   };
 
-  const removeExpenseItem = (index: number) => {
-    setExpenseItems(expenseItems.filter((_, i) => i !== index));
+  const isEmployeeReport = (report: any): boolean => {
+    return getReportEmployees(report).length > 0;
   };
 
-  const updateExpenseItem = (index: number, field: 'name' | 'amount', value: string) => {
-    const newItems = [...expenseItems];
-    if (field === 'amount') {
-      const rawValue = value.replace(/[^0-9]/g, '');
-      const formattedValue = rawValue ? new Intl.NumberFormat('id-ID').format(Number(rawValue)) : '';
-      newItems[index][field] = formattedValue;
-    } else {
-      newItems[index][field] = value;
+  const getEmployeeStats = () => {
+    const statsMap: { [key: string]: any } = {};
+    
+    employees.forEach(empName => {
+      statsMap[empName] = {
+        name: empName,
+        daysWorked: 0,
+        totalGross: 0,
+        splitGross: 0,
+        avgGross: 0,
+        history: [],
+        isActive: true
+      };
+    });
+
+    savedReports.forEach((report: any) => {
+      const reportEmps = getReportEmployees(report);
+      if (reportEmps.length === 0) return;
+
+      const grossVal = report.gross || 0;
+      const splitVal = grossVal / reportEmps.length;
+
+      reportEmps.forEach((empName: string) => {
+        if (!statsMap[empName]) {
+          statsMap[empName] = {
+            name: empName,
+            daysWorked: 0,
+            totalGross: 0,
+            splitGross: 0,
+            avgGross: 0,
+            history: [],
+            isActive: false
+          };
+        }
+        
+        const s = statsMap[empName];
+        s.daysWorked += 1;
+        s.totalGross += grossVal;
+        s.splitGross += splitVal;
+        s.history.push({
+          id: report.id,
+          date: report.date,
+          gross: grossVal,
+          split: splitVal,
+          numEmployees: reportEmps.length
+        });
+      });
+    });
+
+    Object.keys(statsMap).forEach(empName => {
+      const s = statsMap[empName];
+      if (s.daysWorked > 0) {
+        s.avgGross = s.totalGross / s.daysWorked;
+        s.history.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      }
+    });
+
+    return Object.values(statsMap).sort((a: any, b: any) => {
+      if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
+      return b.splitGross - a.splitGross;
+    });
+  };
+
+  const handleAddEmployee = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanName = newEmployeeName.trim();
+    if (!cleanName) return;
+    if (employees.some(emp => emp.toLowerCase() === cleanName.toLowerCase())) {
+      alert(`Karyawan dengan nama "${cleanName}" sudah ada!`);
+      return;
     }
-    setExpenseItems(newItems);
+    setEmployees(prev => [...prev, cleanName]);
+    setNewEmployeeName('');
+  };
+
+  const handleDeleteEmployee = (name: string) => {
+    if (window.confirm(`Apakah Anda yakin ingin menghapus "${name}" dari daftar aktif?\n\nCatatan: Riwayat kerjanya di laporan bulanan tidak akan hilang.`)) {
+      setEmployees(prev => prev.filter(emp => emp !== name));
+      setSelectedEmployees(prev => prev.filter(emp => emp !== name));
+    }
+  };
+
+  const handleToggleSelectEmployee = (name: string) => {
+    setSelectedEmployees(prev => {
+      if (prev.includes(name)) {
+        return prev.filter(emp => emp !== name);
+      } else {
+        return [...prev, name];
+      }
+    });
+  };
+
+  const handleUpdateEmployee = async (oldName: string, newName: string) => {
+    const cleanNewName = newName.trim();
+    if (!cleanNewName) return;
+    if (cleanNewName.toLowerCase() === oldName.toLowerCase()) {
+      setEditingEmployeeName(null);
+      return;
+    }
+    if (employees.some(emp => emp.toLowerCase() === cleanNewName.toLowerCase())) {
+      alert(`Karyawan dengan nama "${cleanNewName}" sudah ada!`);
+      return;
+    }
+
+    setIsSubmitting(true);
+    setEmployees(prev => prev.map(emp => emp === oldName ? cleanNewName : emp));
+    setSelectedEmployees(prev => prev.map(emp => emp === oldName ? cleanNewName : emp));
+
+    const updatedReports = savedReports.map(report => {
+      const reportEmps = getReportEmployees(report);
+      if (reportEmps.includes(oldName)) {
+        const newExpenses = report.expenses.map((exp: any) => 
+          exp && exp.name === oldName ? { ...exp, name: cleanNewName } : exp
+        );
+        const updatedRep = { ...report, expenses: newExpenses };
+
+        if (isSupabaseConfigured && supabase) {
+          supabase
+            .from('daily_reports')
+            .update({ expenses: newExpenses })
+            .eq('id', report.id)
+            .then(({ error }) => {
+              if (error) {
+                console.error(`Gagal memperbarui nama di laporan ${report.id} pada database:`, error);
+              }
+            });
+        }
+        return updatedRep;
+      }
+      return report;
+    });
+
+    setSavedReports(updatedReports);
+    setEditingEmployeeName(null);
+    setIsSubmitting(false);
+    alert(`Nama karyawan berhasil diubah dari "${oldName}" menjadi "${cleanNewName}".`);
   };
 
   const numericGross = Number(grossIncome.replace(/\./g, '')) || 0;
-  const totalReportExpenses = expenseItems.reduce((sum, item) => {
-    const amt = Number(item.amount.replace(/\./g, '')) || 0;
-    return sum + amt;
-  }, 0);
-  const remainingCash = numericGross - totalReportExpenses;
-
-  const copyReportToClipboard = () => {
-    const d = new Date(reportDate);
-    const dateFormatted = new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(d);
-    
-    let text = `Laporan Harian - tgl ${dateFormatted}\n\n`;
-    text += `Total: ${formatCurrency(numericGross)}\n`;
-    expenseItems.forEach(item => {
-      if (item.name && item.amount) {
-        text += `${item.name.toLowerCase()} = ${item.amount}\n`;
-      }
-    });
-    text += `\nsisa uang nya masuk kembalian: ${formatCurrency(remainingCash)}`;
-    
-    navigator.clipboard.writeText(text);
-    alert('Laporan berhasil disalin ke clipboard!');
-  };
 
   const handleSaveReport = async () => {
-    if (!grossIncome || expenseItems.some(i => i.name && !i.amount)) {
-      alert("Mohon lengkapi data penghasilan dan jumlah pengeluaran.");
+    if (numericGross <= 0) {
+      alert("Mohon masukkan jumlah total penjualan yang valid.");
+      return;
+    }
+    if (selectedEmployees.length === 0) {
+      alert("Mohon pilih minimal 1 karyawan yang bertugas hari ini.");
       return;
     }
 
     const reportData = {
       date: reportDate,
       gross: numericGross,
-      expenses: expenseItems.filter(i => i.name && i.amount),
-      sisa: remainingCash
+      expenses: selectedEmployees.map(name => ({ name })),
+      sisa: 0
     };
 
     setIsSubmitting(true);
@@ -535,8 +646,11 @@ function App() {
           
           if (error) {
             console.error("DB Update Report Error:", error);
+            alert("Gagal memperbarui laporan di database.");
           } else {
             setSavedReports(prev => prev.map(r => r.id === editingReportId ? { ...r, ...reportData } : r));
+            alert("Laporan berhasil diperbarui!");
+            handleCancelReportEdit();
           }
         } else {
           const newReport = { id: Date.now().toString(), ...reportData };
@@ -548,31 +662,32 @@ function App() {
           
           if (error) {
             console.error("DB Save Report Error:", error);
+            alert("Gagal menyimpan laporan ke database.");
           } else {
             setSavedReports(prev => [data, ...prev]);
+            alert("Laporan berhasil disimpan!");
+            handleCancelReportEdit();
           }
         }
       } catch (err) {
         console.error("Unexpected error saving report:", err);
       }
     } else {
-      // Localstorage fallback mode
       if (editingReportId) {
         setSavedReports(prev => prev.map(r => r.id === editingReportId ? { ...r, ...reportData } : r));
+        alert("Laporan berhasil diperbarui (Lokal)!");
       } else {
         const newReport = {
           id: Date.now().toString(),
           ...reportData
         };
         setSavedReports(prev => [newReport, ...prev]);
+        alert("Laporan berhasil disimpan (Lokal)!");
       }
+      handleCancelReportEdit();
     }
 
     setIsSubmitting(false);
-    alert(editingReportId ? "Laporan berhasil diperbarui!" : "Laporan berhasil disimpan!");
-    
-    // Clear form after save
-    handleCancelReportEdit();
   };
 
   const handleDeleteReport = (id: string) => {
@@ -596,12 +711,106 @@ function App() {
     setEditingReportId(null);
     setGrossIncome('');
     setReportDate(new Date().toISOString().split('T')[0]);
-    setExpenseItems([
-      { name: 'Masuk kas', amount: '' },
-      { name: 'Karyawan', amount: '' },
-      { name: 'Kontrakan', amount: '' },
-      { name: 'Gas', amount: '' },
-    ]);
+    setSelectedEmployees([]);
+  };
+
+  const handleTutupBukuKaryawanSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    const { startDate, endDate, batchName } = tutupBukuKaryawanModal;
+    if (!startDate || !endDate || !batchName) {
+      alert("Mohon lengkapi semua bidang.");
+      return;
+    }
+
+    const periodReports = savedReports.filter(r => r.date >= startDate && r.date <= endDate);
+    if (periodReports.length === 0) {
+      alert("Tidak ada laporan karyawan dalam rentang tanggal tersebut.");
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    const statsMap: { [key: string]: any } = {};
+    employees.forEach(name => {
+      statsMap[name] = { name, daysWorked: 0, totalGross: 0, splitGross: 0, avgGross: 0 };
+    });
+
+    periodReports.forEach(report => {
+      const reportEmps = getReportEmployees(report);
+      if (reportEmps.length === 0) return;
+      const grossVal = report.gross || 0;
+      const splitVal = grossVal / reportEmps.length;
+
+      reportEmps.forEach(name => {
+        if (!statsMap[name]) {
+          statsMap[name] = { name, daysWorked: 0, totalGross: 0, splitGross: 0, avgGross: 0 };
+        }
+        statsMap[name].daysWorked += 1;
+        statsMap[name].totalGross += grossVal;
+        statsMap[name].splitGross += splitVal;
+      });
+    });
+
+    Object.keys(statsMap).forEach(name => {
+      const s = statsMap[name];
+      if (s.daysWorked > 0) {
+        s.avgGross = s.totalGross / s.daysWorked;
+      }
+    });
+
+    const activeStats = Object.values(statsMap).filter((s: any) => s.daysWorked > 0);
+
+    const newBatch: EmployeeBatch = {
+      id: Date.now().toString(),
+      batchName,
+      startDate,
+      endDate,
+      createdAt: new Date().toISOString(),
+      stats: activeStats
+    };
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { error } = await supabase
+          .from('daily_reports')
+          .delete()
+          .gte('date', startDate)
+          .lte('date', endDate);
+
+        if (error) throw error;
+      } catch (err) {
+        console.error("Gagal menghapus laporan di Supabase saat tutup buku:", err);
+        alert("Gagal melakukan tutup buku karyawan di database. Proses dibatalkan.");
+        setIsSubmitting(false);
+        return;
+      }
+    }
+
+    setEmployeeBatches(prev => [newBatch, ...prev]);
+    setSavedReports(prev => prev.filter(r => r.date < startDate || r.date > endDate));
+
+    setIsSubmitting(false);
+    setTutupBukuKaryawanModal({ isOpen: false, startDate: '', endDate: '', batchName: '' });
+    alert("Tutup buku performa karyawan berhasil diselesaikan dan diarsipkan!");
+  };
+
+  const handleOpenTutupBukuKaryawan = () => {
+    const empReports = savedReports.filter(isEmployeeReport);
+    if (empReports.length === 0) {
+      alert("Tidak ada laporan harian karyawan untuk ditutup buku.");
+      return;
+    }
+    const sorted = [...empReports].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    const startDate = sorted[0].date;
+    const endDate = sorted[sorted.length - 1].date;
+    const batchName = `Batch Karyawan ${employeeBatches.length + 1}`;
+    setTutupBukuKaryawanModal({
+      isOpen: true,
+      startDate,
+      endDate,
+      batchName
+    });
   };
 
   const openTutupBukuModal = () => {
@@ -610,7 +819,6 @@ function App() {
       return;
     }
 
-    // Sort transactions to get default date range
     const sorted = [...currentTransactions].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
     const startDate = sorted[0].date.split('T')[0];
     const endDate = sorted[sorted.length - 1].date.split('T')[0];
@@ -640,7 +848,6 @@ function App() {
 
     if (isSupabaseConfigured && supabase) {
       try {
-        // 1. Create Batch
         const { data: newBatch, error: batchError } = await supabase
           .from('batches')
           .insert([batchData])
@@ -649,7 +856,6 @@ function App() {
 
         if (batchError) throw batchError;
 
-        // 2. Update Transactions
         const { error: transError } = await supabase
           .from('transactions')
           .update({ batch_id: newBatch.id })
@@ -665,7 +871,6 @@ function App() {
         alert("Gagal melakukan tutup buku di database.");
       }
     } else {
-      // LocalStorage Mode
       const localBatch = { id: Date.now().toString(), ...batchData };
       setBatches(prev => [localBatch, ...prev]);
       setTransactions(prev => prev.map(t => (!t.batch_id ? { ...t, batch_id: localBatch.id } : t)));
@@ -736,8 +941,8 @@ function App() {
   return (
     <div className="app-container">
       <header>
-        <h1>Dimsum Anjas</h1>
-        <p>Dashboard Arus Kas & Profit</p>
+        <h1>Dimsum Rasa Terakhir System</h1>
+        <p>Dashboard Arus Kas, Profit & Laporan</p>
         {!isSupabaseConfigured && (
           <div style={{ marginTop: '1rem', padding: '0.8rem', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid var(--expense)', borderRadius: '8px', color: '#fca5a5', fontSize: '0.85rem' }}>
             <strong>Catatan:</strong> Koneksi Supabase belum dikonfigurasi. Mode saat ini menyimpan semua data menggunakan Local Storage di perangkat Anda.
@@ -756,7 +961,7 @@ function App() {
           className={`nav-btn ${activeTab === 'profit' ? 'active' : ''}`}
           onClick={() => {
             setActiveTab('profit');
-            setType('pemasukan'); // Always income in profit tab
+            setType('pemasukan');
           }}
         >
           💰 Profit
@@ -765,7 +970,7 @@ function App() {
           className={`nav-btn ${activeTab === 'report' ? 'active' : ''}`}
           onClick={() => setActiveTab('report')}
         >
-          📝 Laporan Harian
+          👥 Laporan Karyawan
         </button>
       </nav>
 
@@ -774,716 +979,161 @@ function App() {
           Memuat data...
         </div>
       ) : activeTab === 'dashboard' ? (
-        <>
-          <section className="dashboard-cards">
-            <div className="card balance">
-              <div className="card-title">Total Saldo Global (Kas)</div>
-              <div className="card-amount">{formatCurrency(balance)}</div>
-            </div>
-            <div className="card income">
-              <div className="card-title">Pemasukan Periode Ini</div>
-              <div className="card-amount income">{formatCurrency(currentTotalIncome)}</div>
-            </div>
-            <div className="card expense">
-              <div className="card-title">Pengeluaran Periode Ini</div>
-              <div className="card-amount expense">{formatCurrency(currentTotalExpense)}</div>
-            </div>
-          </section>
-
-          <div className="tutup-buku-container">
-            <button className="tutup-buku-btn" onClick={openTutupBukuModal} disabled={isSubmitting}>
-              <span>📤</span> {isSubmitting ? 'Memproses...' : 'Tutup Buku Sekarang'}
-            </button>
-          </div>
-
-          <div className="main-content">
-            <div className="glass-panel">
-              <h2 className="panel-title">
-                <span>✍️</span> {editingId ? 'Edit Transaksi' : 'Catat Transaksi'}
-              </h2>
-              <form className="transaction-form" onSubmit={handleSubmit}>
-                <div className="type-selector">
-                  <button
-                    type="button"
-                    className={`type-btn income ${type === 'pemasukan' ? 'active' : ''}`}
-                    onClick={() => setType('pemasukan')}
-                  >
-                    ↓ Pemasukan
-                  </button>
-                  <button
-                    type="button"
-                    className={`type-btn expense ${type === 'pengeluaran' ? 'active' : ''}`}
-                    onClick={() => setType('pengeluaran')}
-                  >
-                    ↑ Pengeluaran
-                  </button>
-                </div>
-
-                <div className="form-group">
-                  <label>Jumlah (Rp)*</label>
-                  <input
-                    type="text"
-                    className="form-control"
-                    value={amount}
-                    onChange={(e) => {
-                      const rawValue = e.target.value.replace(/[^0-9]/g, '');
-                      if (!rawValue) {
-                        setAmount('');
-                        return;
-                      }
-                      const formattedValue = new Intl.NumberFormat('id-ID').format(Number(rawValue));
-                      setAmount(formattedValue);
-                    }}
-                    placeholder="Contoh: 50.000"
-                    required
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Tanggal & Waktu*</label>
-                  <input
-                    type="datetime-local"
-                    className="form-control"
-                    value={date}
-                    onChange={(e) => setDate(e.target.value)}
-                    required
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Deskripsi (Opsional)</label>
-                  <input
-                    type="text"
-                    className="form-control"
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    placeholder="Contoh: Penjualan 10 porsi dimsum"
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Foto/Bukti (Opsional)</label>
-                  <input
-                    type="file"
-                    id="image-input"
-                    className="form-control"
-                    accept="image/*"
-                    onChange={handleImageChange}
-                    style={{ padding: '0.7rem' }}
-                  />
-                  {imagePreview && (
-                    <div style={{ marginTop: '0.5rem' }}>
-                      <img src={imagePreview} alt="Preview" style={{ width: '100%', height: '140px', objectFit: 'cover', borderRadius: '10px' }} />
-                    </div>
-                  )}
-                </div>
-
-                <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
-                  <button type="submit" className="submit-btn" disabled={isSubmitting} style={{ flex: 1, marginTop: 0 }}>
-                    {isSubmitting ? 'Menyimpan...' : (editingId ? 'Update Transaksi' : 'Simpan Transaksi')}
-                  </button>
-                  {editingId && (
-                    <button type="button" className="cancel-btn" onClick={handleCancelEdit} style={{ flex: 1, marginTop: 0 }}>
-                      Batal
-                    </button>
-                  )}
-                </div>
-              </form>
-            </div>
-
-            <div className="glass-panel">
-              <h2 className="panel-title">
-                <span>📋</span> Riwayat Transaksi (Periode Aktif)
-              </h2>
-              {currentTransactions.length > 0 ? (
-                <div className="history-list">
-                  {currentTransactions.map(t => (
-                    <div key={t.id} className={`history-item ${t.type === 'pemasukan' ? 'income' : 'expense'}`}>
-                      <div className="history-info">
-                        <div className="history-icon">
-                          {t.type === 'pemasukan' ? '↓' : '↑'}
-                        </div>
-                        <div className="history-details">
-                          <h4>{t.description}</h4>
-                          <p>{formatDate(t.date)}</p>
-                        </div>
-                      </div>
-                      <div className="history-amount-container">
-                        <div className={`history-amount ${t.type === 'pemasukan' ? 'income' : 'expense'}`}>
-                          {t.type === 'pemasukan' ? '+' : '-'}{formatCurrency(t.amount)}
-                        </div>
-                        {t.image && (
-                          <img 
-                            src={t.image} 
-                            alt="Bukti" 
-                            className="history-img-preview" 
-                            onClick={() => setSelectedImage(t.image)} 
-                          />
-                        )}
-                        <div className="history-actions">
-                          <button className="action-btn edit" onClick={(e) => { e.stopPropagation(); promptPassword('edit', t); }}>Edit</button>
-                          <button className="action-btn delete" onClick={(e) => { e.stopPropagation(); promptPassword('delete', t.id); }}>Hapus</button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="empty-state">
-                  Belum ada transaksi di periode ini. Silakan catat transaksi baru atau cek riwayat batch di bawah.
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="batch-history-section">
-            <div className="glass-panel">
-              <h2 className="panel-title"><span>📚</span> Riwayat Tutup Buku (Batch Kas)</h2>
-              {batches.length > 0 ? (
-                <div className="batch-list">
-                  {batches.map(batch => (
-                    <div key={batch.id} className={`batch-card ${expandedBatchId === batch.id ? 'expanded' : ''}`}>
-                      <div className="batch-header" onClick={() => setExpandedBatchId(expandedBatchId === batch.id ? null : batch.id)}>
-                        <div className="batch-title-group">
-                          <h3>{batch.batch_name}</h3>
-                          <p className="batch-date-range">
-                            {new Date(batch.start_date).toLocaleDateString()} - {new Date(batch.end_date).toLocaleDateString()}
-                          </p>
-                        </div>
-                        <div className="batch-summary">
-                          <div className="summary-item">
-                            <span className="summary-label">Saldo</span>
-                            <span className="summary-value">{formatCurrency(batch.total_balance)}</span>
-                          </div>
-                          <div className={`expand-icon ${expandedBatchId === batch.id ? 'active' : ''}`}>▼</div>
-                        </div>
-                      </div>
-                      
-                      {expandedBatchId === batch.id && (
-                        <div className="batch-details">
-                          <div className="batch-mini-stats">
-                            <div className="mini-stat income">
-                              <span>Pemasukan:</span>
-                              <strong>{formatCurrency(batch.total_income)}</strong>
-                            </div>
-                            <div className="mini-stat expense">
-                              <span>Pengeluaran:</span>
-                              <strong>{formatCurrency(batch.total_expense)}</strong>
-                            </div>
-                          </div>
-                          <div className="batch-transactions-list">
-                            {transactions
-                              .filter(t => t.batch_id === batch.id)
-                              .map(t => (
-                                <div key={t.id} className="batch-trans-item">
-                                  <span className="trans-desc">{t.description}</span>
-                                  <span className={`trans-amt ${t.type === 'pemasukan' ? 'income' : 'expense'}`}>
-                                    {t.type === 'pemasukan' ? '+' : '-'}{new Intl.NumberFormat('id-ID').format(t.amount)}
-                                  </span>
-                                </div>
-                              ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="empty-state">Belum ada riwayat tutup buku kas.</div>
-              )}
-            </div>
-          </div>
-        </>
+        <DashboardPage
+          balance={balance}
+          currentTotalIncome={currentTotalIncome}
+          currentTotalExpense={currentTotalExpense}
+          openTutupBukuModal={openTutupBukuModal}
+          isSubmitting={isSubmitting}
+          editingId={editingId}
+          type={type}
+          setType={setType}
+          amount={amount}
+          setAmount={setAmount}
+          date={date}
+          setDate={setDate}
+          description={description}
+          setDescription={setDescription}
+          imagePreview={imagePreview}
+          handleImageChange={handleImageChange}
+          handleSubmit={handleSubmit}
+          handleCancelEdit={handleCancelEdit}
+          currentTransactions={currentTransactions}
+          transactions={transactions}
+          promptPassword={promptPassword}
+          setSelectedImage={setSelectedImage}
+          batches={batches}
+          expandedBatchId={expandedBatchId}
+          setExpandedBatchId={setExpandedBatchId}
+          formatCurrency={formatCurrency}
+          formatDate={formatDate}
+        />
       ) : activeTab === 'profit' ? (
-        <>
-          <section className="dashboard-cards">
-            <div className="card balance">
-              <div className="card-title">Total Keuntungan All-Time</div>
-              <div className="card-amount">{formatCurrency(allTimeProfit)}</div>
-            </div>
-            <div className="card income">
-              <div className="card-title">Profit Bulan Ini</div>
-              <div className="card-amount income">{formatCurrency(currentPeriodProfit)}</div>
-            </div>
-          </section>
-
-          <div className="tutup-buku-container">
-            <button className="tutup-buku-btn" onClick={() => {
-              if (currentProfitTransactions.length === 0) {
-                alert("Tidak ada profit untuk ditutup buku.");
-                return;
-              }
-              const sorted = [...currentProfitTransactions].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-              const startDate = sorted[0].date.split('T')[0];
-              const endDate = sorted[sorted.length - 1].date.split('T')[0];
-              const batchName = `Profit Batch ${profitBatches.length + 1}`;
-              setTutupBukuModal({ isOpen: true, startDate, endDate, batchName });
-            }} disabled={isSubmitting}>
-              <span>📤</span> {isSubmitting ? 'Memproses...' : 'Tutup Buku Profit Bulan Ini'}
-            </button>
-          </div>
-
-          <div className="main-content">
-            <div className="glass-panel">
-              <h2 className="panel-title">
-                <span>💰</span> {editingId ? 'Edit Catatan Profit' : 'Catat Keuntungan'}
-              </h2>
-              <form className="transaction-form" onSubmit={handleSubmit}>
-                <div className="form-group">
-                  <label>Jumlah Keuntungan (Rp)*</label>
-                  <input
-                    type="text"
-                    className="form-control"
-                    value={amount}
-                    onChange={(e) => {
-                      const rawValue = e.target.value.replace(/[^0-9]/g, '');
-                      if (!rawValue) {
-                        setAmount('');
-                        return;
-                      }
-                      const formattedValue = new Intl.NumberFormat('id-ID').format(Number(rawValue));
-                      setAmount(formattedValue);
-                    }}
-                    placeholder="Contoh: 1.000.000"
-                    required
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Tanggal & Waktu*</label>
-                  <input
-                    type="datetime-local"
-                    className="form-control"
-                    value={date}
-                    onChange={(e) => setDate(e.target.value)}
-                    required
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Keterangan Profit (Opsional)</label>
-                  <input
-                    type="text"
-                    className="form-control"
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    placeholder="Contoh: Profit Bersih Maret 2024"
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label>Foto/Bukti (Opsional)</label>
-                  <input
-                    type="file"
-                    id="image-input"
-                    className="form-control"
-                    accept="image/*"
-                    onChange={handleImageChange}
-                  />
-                  {imagePreview && (
-                    <div style={{ marginTop: '0.5rem' }}>
-                      <img src={imagePreview} alt="Preview" style={{ width: '100%', height: '140px', objectFit: 'cover', borderRadius: '10px' }} />
-                    </div>
-                  )}
-                </div>
-
-                <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
-                  <button type="submit" className="submit-btn" disabled={isSubmitting} style={{ flex: 1, marginTop: 0 }}>
-                    {isSubmitting ? 'Menyimpan...' : (editingId ? 'Update Profit' : 'Simpan Profit')}
-                  </button>
-                  {editingId && (
-                    <button type="button" className="cancel-btn" onClick={handleCancelEdit} style={{ flex: 1, marginTop: 0 }}>
-                      Batal
-                    </button>
-                  )}
-                </div>
-              </form>
-            </div>
-
-            <div className="glass-panel">
-              <h2 className="panel-title">
-                <span>📋</span> Riwayat Profit (Periode Aktif)
-              </h2>
-              {currentProfitTransactions.length > 0 ? (
-                <div className="history-list">
-                  {currentProfitTransactions.map(t => (
-                    <div key={t.id} className="history-item income">
-                      <div className="history-info">
-                        <div className="history-icon">💰</div>
-                        <div className="history-details">
-                          <h4>{t.description}</h4>
-                          <p>{formatDate(t.date)}</p>
-                        </div>
-                      </div>
-                      <div className="history-amount-container">
-                        <div className="history-amount income">
-                          +{formatCurrency(t.amount)}
-                        </div>
-                        <div className="history-actions">
-                          <button className="action-btn edit" onClick={() => promptPassword('edit', t)}>Edit</button>
-                          <button className="action-btn delete" onClick={() => promptPassword('delete', t.id)}>Hapus</button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="empty-state">Belum ada catatan profit di periode ini.</div>
-              )}
-            </div>
-          </div>
-
-          <div className="batch-history-section">
-            <div className="glass-panel">
-              <h2 className="panel-title"><span>📚</span> Riwayat Tutup Buku Profit</h2>
-              {profitBatches.length > 0 ? (
-                <div className="batch-list">
-                  {profitBatches.map(batch => (
-                    <div key={batch.id} className={`batch-card ${expandedProfitBatchId === batch.id ? 'expanded' : ''}`}>
-                      <div className="batch-header" onClick={() => setExpandedProfitBatchId(expandedProfitBatchId === batch.id ? null : batch.id)}>
-                        <div className="batch-title-group">
-                          <h3>{batch.batch_name}</h3>
-                          <p className="batch-date-range">
-                            {new Date(batch.start_date).toLocaleDateString()} - {new Date(batch.end_date).toLocaleDateString()}
-                          </p>
-                        </div>
-                        <div className="batch-summary">
-                          <div className="summary-item">
-                            <span className="summary-label">Total Profit</span>
-                            <span className="summary-value">{formatCurrency(batch.total_balance)}</span>
-                          </div>
-                          <div className={`expand-icon ${expandedProfitBatchId === batch.id ? 'active' : ''}`}>▼</div>
-                        </div>
-                      </div>
-                      {expandedProfitBatchId === batch.id && (
-                        <div className="batch-details">
-                          <div className="batch-transactions-list">
-                            {profitTransactions
-                              .filter(t => t.batch_id === batch.id)
-                              .map(t => (
-                                <div key={t.id} className="batch-trans-item">
-                                  <span className="trans-desc">{t.description}</span>
-                                  <span className="trans-amt income">+{new Intl.NumberFormat('id-ID').format(t.amount)}</span>
-                                </div>
-                              ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="empty-state">Belum ada riwayat tutup buku profit.</div>
-              )}
-            </div>
-          </div>
-        </>
+        <ProfitPage
+          allTimeProfit={allTimeProfit}
+          currentPeriodProfit={currentPeriodProfit}
+          openTutupBukuProfitModal={() => {
+            if (currentProfitTransactions.length === 0) {
+              alert("Tidak ada profit untuk ditutup buku.");
+              return;
+            }
+            const sorted = [...currentProfitTransactions].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+            const startDate = sorted[0].date.split('T')[0];
+            const endDate = sorted[sorted.length - 1].date.split('T')[0];
+            const batchName = `Profit Batch ${profitBatches.length + 1}`;
+            setTutupBukuModal({ isOpen: true, startDate, endDate, batchName });
+          }}
+          isSubmitting={isSubmitting}
+          editingId={editingId}
+          amount={amount}
+          setAmount={setAmount}
+          date={date}
+          setDate={setDate}
+          description={description}
+          setDescription={setDescription}
+          imagePreview={imagePreview}
+          handleImageChange={handleImageChange}
+          handleSubmit={handleSubmit}
+          handleCancelEdit={handleCancelEdit}
+          currentProfitTransactions={currentProfitTransactions}
+          profitTransactions={profitTransactions}
+          promptPassword={promptPassword}
+          profitBatches={profitBatches}
+          expandedProfitBatchId={expandedProfitBatchId}
+          setExpandedProfitBatchId={setExpandedProfitBatchId}
+          formatCurrency={formatCurrency}
+          formatDate={formatDate}
+        />
       ) : (
-        <div className="report-container">
-          <div className="report-grid">
-            <div className="glass-panel">
-              <h2 className="panel-title"><span>💰</span> Input Penghasilan & Pengeluaran</h2>
-              <div className="form-group" style={{ marginBottom: '1.5rem' }}>
-                <label>Tanggal Laporan</label>
-                <input 
-                  type="date" 
-                  className="form-control" 
-                  value={reportDate} 
-                  onChange={(e) => setReportDate(e.target.value)} 
-                />
-              </div>
-              <div className="form-group" style={{ marginBottom: '1.5rem' }}>
-                <label>Total Penghasilan Kotor (Gross)*</label>
-                <input
-                  type="text"
-                  className="form-control"
-                  style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'var(--income)' }}
-                  value={grossIncome}
-                  onChange={(e) => {
-                    const rawValue = e.target.value.replace(/[^0-9]/g, '');
-                    const formattedValue = rawValue ? new Intl.NumberFormat('id-ID').format(Number(rawValue)) : '';
-                    setGrossIncome(formattedValue);
-                  }}
-                  placeholder="Contoh: 1.840.000"
-                />
-              </div>
+        <EmployeePage
+          savedReports={savedReports}
+          employees={employees}
+          selectedEmployees={selectedEmployees}
+          newEmployeeName={newEmployeeName}
+          setNewEmployeeName={setNewEmployeeName}
+          editingReportId={editingReportId}
+          reportDate={reportDate}
+          setReportDate={setReportDate}
+          grossIncome={grossIncome}
+          setGrossIncome={setGrossIncome}
+          isSubmitting={isSubmitting}
+          editingEmployeeName={editingEmployeeName}
+          setEditingEmployeeName={setEditingEmployeeName}
+          editEmployeeInput={editEmployeeInput}
+          setEditEmployeeInput={setEditEmployeeInput}
+          expandedEmployeeCard={expandedEmployeeCard}
+          setExpandedEmployeeCard={setExpandedEmployeeCard}
+          expandedReportId={expandedReportId}
+          setExpandedReportId={setExpandedReportId}
+          expandedEmpBatchId={expandedEmpBatchId}
+          setExpandedEmpBatchId={setExpandedEmpBatchId}
+          employeeBatches={employeeBatches}
+          setEmployeeBatches={setEmployeeBatches}
+          getReportEmployees={getReportEmployees}
+          isEmployeeReport={isEmployeeReport}
+          getEmployeeStats={getEmployeeStats}
+          handleAddEmployee={handleAddEmployee}
+          handleDeleteEmployee={handleDeleteEmployee}
+          handleToggleSelectEmployee={handleToggleSelectEmployee}
+          handleUpdateEmployee={handleUpdateEmployee}
+          handleSaveReport={handleSaveReport}
+          handleCancelReportEdit={handleCancelReportEdit}
+          handleDeleteReport={handleDeleteReport}
+          loadReportToForm={loadReportToForm}
+          handleOpenTutupBukuKaryawan={handleOpenTutupBukuKaryawan}
+          formatCurrency={formatCurrency}
+        />
+      )}
 
-              <div style={{ marginBottom: '0.8rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <label style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Daftar Pengeluaran Harian</label>
-              </div>
-
-              {expenseItems.map((item, index) => (
-                <div key={index} className="expense-item-row">
-                  <input 
-                    type="text" 
-                    className="form-control" 
-                    placeholder="Nama pengeluaran" 
-                    value={item.name} 
-                    onChange={(e) => updateExpenseItem(index, 'name', e.target.value)}
-                  />
-                  <input 
-                    type="text" 
-                    className="form-control" 
-                    placeholder="Jumlah" 
-                    value={item.amount} 
-                    onChange={(e) => updateExpenseItem(index, 'amount', e.target.value)}
-                  />
-                  <button className="remove-btn" onClick={() => removeExpenseItem(index)} title="Hapus">
-                    &times;
-                  </button>
-                </div>
-              ))}
-
-              <button className="add-item-btn" onClick={addExpenseItem}>
-                + Tambah Item Pengeluaran
-              </button>
-            </div>
-
-            <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column' }}>
-              <h2 className="panel-title"><span>📄</span> Preview Laporan</h2>
-              
-              <div className="report-preview" id="printable-report">
-                <div style={{ textAlign: 'center', marginBottom: '1.5rem', borderBottom: '1px dashed rgba(255,255,255,0.1)', paddingBottom: '1rem' }}>
-                  <h3 style={{ margin: 0 }}>DIMSUM ANJAS</h3>
-                  <p style={{ fontSize: '0.8rem', margin: '5px 0' }}>Laporan Penghasilan Harian</p>
-                  <p style={{ fontSize: '0.9rem', fontWeight: '600' }}>
-                    tgl {new Intl.DateTimeFormat('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(reportDate))}
-                  </p>
-                </div>
-
-                <table className="report-table">
-                  <thead>
-                    <tr>
-                      <th>Keterangan</th>
-                      <th className="text-right">Jumlah</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <td>Total Penghasilan</td>
-                      <td className="text-right highlight">{formatCurrency(numericGross)}</td>
-                    </tr>
-                    {expenseItems.map((item, index) => item.name && (
-                      <tr key={index}>
-                        <td>{item.name}</td>
-                        <td className="text-right" style={{ color: 'var(--expense)' }}>-{formatCurrency(Number(item.amount.replace(/\./g, '')) || 0)}</td>
-                      </tr>
-                    ))}
-                    <tr className="total-row">
-                      <td>Sisa Uang (Kembalian)</td>
-                      <td className="text-right highlight" style={{ fontSize: '1.2rem' }}>{formatCurrency(remainingCash)}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-
-              <button className="copy-report-btn" onClick={copyReportToClipboard}>
-                <span>📋</span> Salin Teks Laporan
-              </button>
-
-              <button className="save-report-btn" onClick={handleSaveReport} disabled={isSubmitting}>
-                <span>💾</span> {isSubmitting ? 'Menyimpan...' : (editingReportId ? 'Perbarui Laporan' : 'Simpan Laporan')}
-              </button>
-
-              {editingReportId && (
-                <button className="cancel-btn" onClick={handleCancelReportEdit} style={{ width: '100%', marginTop: '0.8rem' }}>
-                  Batal Edit
-                </button>
-              )}
-
-              <div style={{ marginTop: 'auto', paddingTop: '2rem', fontSize: '0.8rem', color: 'var(--text-secondary)', textAlign: 'center' }}>
-                Gunakan sisa uang ini untuk modal kembalian esok hari.
-              </div>
-            </div>
-
-            {savedReports.length > 0 && (
-              <div className="glass-panel saved-reports-list">
-                <h2 className="panel-title"><span>📚</span> Riwayat Laporan Tersimpan</h2>
-                <div className="reports-table-container">
-                  <table className="reports-table">
-                    <thead>
-                      <tr>
-                        <th>Tanggal</th>
-                        <th>Penghasilan Kotor</th>
-                        <th>Banyak Item</th>
-                        <th>Sisa (Kembalian)</th>
-                        <th>Aksi</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {savedReports.map(report => (
-                        <React.Fragment key={report.id}>
-                          <tr>
-                            <td data-label="Tanggal">{new Intl.DateTimeFormat('id-ID', { dateStyle: 'medium' }).format(new Date(report.date))}</td>
-                            <td data-label="Penghasilan Kotor" style={{ color: 'var(--income)', fontWeight: 'bold' }}>{formatCurrency(report.gross)}</td>
-                            <td data-label="Banyak Item">{report.expenses?.length || 0} item</td>
-                            <td data-label="Sisa (Kembalian)" style={{ color: 'var(--primary-orange)', fontWeight: 'bold' }}>{formatCurrency(report.sisa)}</td>
-                            <td>
-                              <div className="report-actions">
-                                <button className={`report-action-btn view ${editingReportId === report.id ? 'active' : ''}`} onClick={() => loadReportToForm(report)}>
-                                  {editingReportId === report.id ? 'Sedang Edit' : 'Edit'}
-                                </button>
-                                <button className="report-action-btn delete" onClick={() => handleDeleteReport(report.id)}>Hapus</button>
-                                <button 
-                                  className={`report-action-btn collapse-btn ${expandedReportId === report.id ? 'active' : ''}`}
-                                  onClick={() => setExpandedReportId(expandedReportId === report.id ? null : report.id)}
-                                  title={expandedReportId === report.id ? 'Tutup Detail' : 'Lihat Detail'}
-                                >
-                                  {expandedReportId === report.id ? '▲ Tutup' : '▼ Detail'}
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                          {expandedReportId === report.id && (
-                            <tr className="expanded-row">
-                              <td colSpan={5}>
-                                <div className="expanded-content">
-                                  <h4>Rincian Pengeluaran:</h4>
-                                  <ul className="expense-details-list">
-                                    {report.expenses.map((exp: any, idx: number) => (
-                                      <li key={idx}>
-                                        <span className="exp-name">{exp.name}</span>
-                                        <span className="exp-amount">{exp.amount}</span>
-                                      </li>
-                                    ))}
-                                    <li className="total-summary">
-                                      <span>Sisa Kembalian:</span>
-                                      <span style={{ color: 'var(--primary-orange)', fontWeight: 'bold' }}>{formatCurrency(report.sisa)}</span>
-                                    </li>
-                                  </ul>
-                                </div>
-                              </td>
-                            </tr>
-                          )}
-                        </React.Fragment>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
+      {tutupBukuKaryawanModal.isOpen && (
+        <TutupBukuKaryawanModal
+          startDate={tutupBukuKaryawanModal.startDate}
+          endDate={tutupBukuKaryawanModal.endDate}
+          batchName={tutupBukuKaryawanModal.batchName}
+          onChangeStartDate={(val) => setTutupBukuKaryawanModal({ ...tutupBukuKaryawanModal, startDate: val })}
+          onChangeEndDate={(val) => setTutupBukuKaryawanModal({ ...tutupBukuKaryawanModal, endDate: val })}
+          onChangeBatchName={(val) => setTutupBukuKaryawanModal({ ...tutupBukuKaryawanModal, batchName: val })}
+          isSubmitting={isSubmitting}
+          onSubmit={handleTutupBukuKaryawanSubmit}
+          onClose={() => setTutupBukuKaryawanModal({ ...tutupBukuKaryawanModal, isOpen: false })}
+        />
       )}
 
       {tutupBukuModal.isOpen && (
-        <div className="password-modal-overlay">
-          <div className="password-modal-content" style={{ maxWidth: '450px' }}>
-            <h3>Konfirmasi Tutup Buku {activeTab === 'profit' ? 'Profit' : 'Kas'}</h3>
-            <p style={{ marginBottom: '1.5rem', fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
-              Silakan tinjau rentang tanggal dan nama batch sebelum menutup buku periode ini.
-            </p>
-            
-            <form onSubmit={activeTab === 'profit' ? handleTutupBukuProfit : handleTutupBuku}>
-              <div className="form-group" style={{ marginBottom: '1rem' }}>
-                <label>Nama Batch</label>
-                <input 
-                  type="text" 
-                  className="form-control" 
-                  value={tutupBukuModal.batchName}
-                  onChange={(e) => setTutupBukuModal({...tutupBukuModal, batchName: e.target.value})}
-                  required
-                />
-              </div>
-              
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.5rem' }}>
-                <div className="form-group">
-                  <label>Tanggal Mulai</label>
-                  <input 
-                    type="date" 
-                    className="form-control" 
-                    value={tutupBukuModal.startDate}
-                    onChange={(e) => setTutupBukuModal({...tutupBukuModal, startDate: e.target.value})}
-                    required
-                  />
-                </div>
-                <div className="form-group">
-                  <label>Tanggal Akhir</label>
-                  <input 
-                    type="date" 
-                    className="form-control" 
-                    value={tutupBukuModal.endDate}
-                    onChange={(e) => setTutupBukuModal({...tutupBukuModal, endDate: e.target.value})}
-                    required
-                  />
-                </div>
-              </div>
-
-              <div className="balance-info" style={{ background: 'rgba(255,255,255,0.05)', padding: '1rem', borderRadius: '10px', marginBottom: '1.5rem' }}>
-                {activeTab === 'profit' ? (
-                  <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '0.5rem' }}>
-                    <span style={{ fontWeight: 'bold' }}>Total Profit:</span>
-                    <span style={{ fontWeight: 'bold', color: 'var(--income)' }}>{formatCurrency(currentPeriodProfit)}</span>
-                  </div>
-                ) : (
-                  <>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>Total Pemasukan:</span>
-                      <span style={{ color: 'var(--income)', fontWeight: 'bold' }}>{formatCurrency(currentTotalIncome)}</span>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>Total Pengeluaran:</span>
-                      <span style={{ color: 'var(--expense)', fontWeight: 'bold' }}>{formatCurrency(currentTotalExpense)}</span>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '0.5rem' }}>
-                      <span style={{ fontWeight: 'bold' }}>Total Saldo Batch:</span>
-                      <span style={{ fontWeight: 'bold' }}>{formatCurrency(currentBalance)}</span>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              <div style={{ display: 'flex', gap: '1rem' }}>
-                <button type="submit" className="submit-btn" disabled={isSubmitting} style={{ flex: 1, marginTop: 0 }}>
-                  {isSubmitting ? 'Memproses...' : 'Ya, Tutup Buku'}
-                </button>
-                <button 
-                  type="button" 
-                  className="cancel-btn" 
-                  onClick={() => setTutupBukuModal({ ...tutupBukuModal, isOpen: false })} 
-                  style={{ flex: 1, marginTop: 0 }}
-                  disabled={isSubmitting}
-                >
-                  Batal
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+        <TutupBukuModal
+          activeTab={activeTab}
+          startDate={tutupBukuModal.startDate}
+          endDate={tutupBukuModal.endDate}
+          batchName={tutupBukuModal.batchName}
+          onChangeStartDate={(val) => setTutupBukuModal({ ...tutupBukuModal, startDate: val })}
+          onChangeEndDate={(val) => setTutupBukuModal({ ...tutupBukuModal, endDate: val })}
+          onChangeBatchName={(val) => setTutupBukuModal({ ...tutupBukuModal, batchName: val })}
+          currentTotalIncome={currentTotalIncome}
+          currentTotalExpense={currentTotalExpense}
+          currentBalance={currentBalance}
+          currentPeriodProfit={currentPeriodProfit}
+          formatCurrency={formatCurrency}
+          isSubmitting={isSubmitting}
+          onSubmit={activeTab === 'profit' ? handleTutupBukuProfit : handleTutupBuku}
+          onClose={() => setTutupBukuModal({ ...tutupBukuModal, isOpen: false })}
+        />
       )}
 
       {selectedImage && (
-        <div className="image-modal-overlay" onClick={() => setSelectedImage(null)}>
-          <div className="image-modal-content" onClick={(e) => e.stopPropagation()}>
-            <span className="image-modal-close" onClick={() => setSelectedImage(null)}>&times;</span>
-            <img src={selectedImage} alt="Bukti Full" />
-          </div>
-        </div>
+        <ImageModal
+          imageUrl={selectedImage}
+          onClose={() => setSelectedImage(null)}
+        />
       )}
 
       {passwordModal.isOpen && (
-        <div className="password-modal-overlay" onClick={() => setPasswordModal({ isOpen: false, action: null, data: null })}>
-          <div className="password-modal-content" onClick={(e) => e.stopPropagation()}>
-            <h3>Masukkan Password</h3>
-            <p>Otorisasi diperlukan untuk aksi <strong>{passwordModal.action === 'edit' ? 'Edit' : 'Hapus'}</strong>.</p>
-            <form onSubmit={handlePasswordSubmit}>
-              <input 
-                type="password" 
-                autoFocus
-                className="form-control" 
-                placeholder="Password" 
-                value={passwordInput}
-                onChange={(e) => setPasswordInput(e.target.value)}
-                style={{ width: '100%', marginBottom: '1rem', marginTop: '1rem' }}
-                required
-              />
-              <div style={{ display: 'flex', gap: '1rem' }}>
-                <button type="submit" className="submit-btn" style={{ flex: 1, marginTop: 0 }}>Konfirmasi</button>
-                <button type="button" className="cancel-btn" onClick={() => setPasswordModal({ isOpen: false, action: null, data: null })} style={{ flex: 1, marginTop: 0 }}>Batal</button>
-              </div>
-            </form>
-          </div>
-        </div>
+        <PasswordModal
+          actionName={passwordModal.action}
+          passwordInput={passwordInput}
+          setPasswordInput={setPasswordInput}
+          onSubmit={handlePasswordSubmit}
+          onClose={() => setPasswordModal({ isOpen: false, action: null, data: null })}
+        />
       )}
     </div>
   );

@@ -377,7 +377,7 @@ export const EmployeePage: React.FC<EmployeePageProps> = ({
                           </td>
                           <td data-label="Karyawan Bertugas">
                             {isEmpRep ? (
-                              <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                              <div className="report-emps-list">
                                 {reportEmps.map(name => (
                                   <span key={name} className="report-emp-badge">{name}</span>
                                 ))}

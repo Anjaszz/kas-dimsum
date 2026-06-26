@@ -173,12 +173,12 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
               )}
             </div>
 
-            <div style={{ display: 'flex', gap: '1rem', marginTop: '1rem' }}>
-              <button type="submit" className="submit-btn" disabled={isSubmitting} style={{ flex: 1, marginTop: 0 }}>
+            <div className="form-actions">
+              <button type="submit" className="submit-btn" disabled={isSubmitting}>
                 {isSubmitting ? 'Menyimpan...' : (editingId ? 'Update Transaksi' : 'Simpan Transaksi')}
               </button>
               {editingId && (
-                <button type="button" className="cancel-btn" onClick={handleCancelEdit} style={{ flex: 1, marginTop: 0 }}>
+                <button type="button" className="cancel-btn" onClick={handleCancelEdit}>
                   Batal
                 </button>
               )}

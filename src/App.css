@@ -1364,15 +1364,117 @@ header p {
   justify-content: flex-end;
 }
 
+.form-actions {
+  display: flex;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.form-actions button {
+  flex: 1;
+  margin-top: 0 !important;
+}
+
+/* Batch Details Inner Styles */
+.batch-mini-stats {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1.2rem;
+}
+
+.mini-stat {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.mini-stat span {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+
+.mini-stat strong {
+  font-size: 1.05rem;
+}
+
+.mini-stat.income strong {
+  color: var(--income);
+}
+
+.mini-stat.expense strong {
+  color: var(--expense);
+}
+
+.batch-transactions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  max-height: 250px;
+  overflow-y: auto;
+  padding-right: 0.4rem;
+}
+
+.batch-trans-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.6rem 0.8rem;
+  background: rgba(255, 255, 255, 0.01);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.trans-desc {
+  color: var(--text-primary);
+  word-break: break-word;
+  padding-right: 0.5rem;
+}
+
+.trans-amt {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 /* Tablet & Mobile Tweaks */
 @media (max-width: 768px) {
-  .reports-table td div {
+  .reports-table td {
+    white-space: normal !important;
+  }
+  .report-emps-list {
     justify-content: flex-end;
+    flex: 1;
+    margin-left: 1rem;
+    min-width: 0; /* Prevents overflow */
   }
 }
 
 /* Mobile Tweaks */
 @media (max-width: 480px) {
+  .app-container {
+    padding: 0.8rem;
+    gap: 1rem;
+  }
+
+  .form-actions {
+    flex-direction: column;
+    gap: 0.8rem;
+  }
+
+  .form-actions button {
+    width: 100%;
+  }
+
+  .batch-mini-stats {
+    flex-direction: column;
+    gap: 0.8rem;
+  }
+
   .add-employee-form {
     flex-direction: column;
     gap: 0.8rem;
